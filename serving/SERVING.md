@@ -1,180 +1,203 @@
 # RWKV7-Ascend serving framework
 
-> **TL;DR** — Since `vllm-ascend` can't pair with `vllm-rwkv` on CANN 8.5.0 (version
-> lag, see below), this directory is a **self-contained RWKV7 continuous-batch
-> serving engine for Ascend NPU**, built on our verified C++ forward. It serves an
-> OpenAI-compatible `/v1/completions` API, does dynamic continuous batching, supports
-> top-k / top-p / temperature sampling, and hits **>2× Albatross** aggregate throughput
-> on a 910B3 — all our own code, no vLLM dependency.
+> A self-contained RWKV7 continuous-batch serving engine for Ascend NPU. Live
+> OpenAI-compatible `/v1/completions` API, dynamic batching, streaming + stop
+> strings, sampler (temperature/top-k/top-p), multi-worker router, Prometheus
+> metrics, a Docker image, and a 21-test pytest suite — at **>2× Albatross**
+> aggregate throughput on a 910B3. Our own code, no vLLM dependency.
+
+---
+
+## What this is (and isn't)
+
+It's **vLLM's *serving ideas* applied to RWKV7 on NPU** — not a vLLM clone.
+
+- **Borrowed from vLLM (the right ideas):** continuous batching, OpenAI-compatible
+  API, a front-end router over multiple workers, a `/metrics` endpoint, SSE
+  streaming + stop strings.
+- **Our own (because RWKV7 ≠ a vLLm attention model):** a **state-based** scheduler
+  (`SlottedScheduler`) that batches *recurrent state* `(sa, xp, xf, vf)` — not
+  vLLM's PagedAttention + KV-cache blocks (RWKV7 is an RNN; it has no KV-cache).
+  vLLM's signature machinery doesn't apply, so we wrote the minimal engine that does.
+- **Scale:** ~7 files, single-card-per-worker. ~5–10% of vLLM's surface —
+  deliberately minimal, RWKV7+NPU-specific.
+- **Not a vLLm port:** vLLM isn't even reachable here (`vllm-ascend` can't pair
+  with `vllm-rwkv` on CANN 8.5.0 — see "Why" below). We bypass it entirely.
+
+Even upstream `vllm-rwkv` had to rewrite vLLM's v1 scheduler for RWKV7
+(`rwkv_decode_wave`) — so RWKV7 was always going to need its own engine path.
 
 ---
 
 ## Why this exists (the vLLM blocker)
 
-Serving RWKV7 on Ascend via vLLM is currently **not possible**, and the reason is
-upstream version lag — not anything fixable on our side:
+Serving RWKV7 on Ascend via vLLM is currently **not possible** — upstream version lag:
 
 ```
-vllm-rwkv (rwkv-rs)   base = vllm v0.23.1rc0   (tracks vllm main, rebased weekly)
+vllm-rwkv (rwkv-rs)   base = vllm v0.23.1rc0   (tracks vllm main)
 vllm-ascend (Huawei)  newest = 0.22.1rc1       (needs CANN 9.0.0 + torch_npu 2.10)
                       huawei mirror tops out at 0.18.0
 our 910B3             CANN 8.5.0 + torch_npu 2.9.0
 ```
 
-There is **no vllm-ascend release that matches vllm-rwkv's v0.23 base**. Overlaying
-vllm-rwkv's `vllm/` onto stock vllm 0.13.0 + vllm-ascend 0.13.0 fails: vllm-rwkv's
-`platforms/__init__.py` uses a lazy `current_platform` (`__getattr__`) that
-deadlocks vllm-ascend 0.13.0's import chain. Unblocking would require a major
-CANN 8.5→9.0 + torch_npu 2.9→2.10 upgrade *and* still leaves a 0.23↔0.22 mismatch.
-
-So instead of waiting on the upstreams, we serve RWKV7 ourselves.
+No vllm-ascend release matches vllm-rwkv's v0.23 base. Overlaying vllm-rwkv's
+`vllm/` onto stock vllm 0.13.0 + vllm-ascend 0.13.0 deadlocks (lazy
+`current_platform` import cycle). So we serve RWKV7 ourselves.
 
 ---
 
 ## Architecture
 
 ```
-                       HTTP (FastAPI / uvicorn)
-                              |
-                       /v1/completions  (async)
-                              |
-                         AsyncServer        ← single-threaded asyncio loop
-                              |                (torch_npu is main-thread-only;
-                              |                 _run task created on uvicorn's
-                              |                 running loop via startup event)
-                       SlottedScheduler      ← persistent batched recurrent state
-                              |                 (grow on join, swap-remove on leave,
-                              |                 NO per-step cat)  → 3666 tok/s
-                              |
-                    RWKV7Engine._step        ← one batched decode step
-                              |
-                  rwkv7_ascend_v3.cpp        ← C++ forward (libtorch/aclnn),
-                  (perf/rwkv7_ascend_v3.cpp)    the NPU analog of Albatross's CUDA kernel
-                              |
-                          CANN 8.5.0 / 910B3
+                 HTTP (FastAPI / uvicorn)
+                          |
+        ┌─────────────────┴─────────────────┐
+        |  serve_router.py (front-end)       |   least-in-flight routing,
+        |  /v1/completions  /health  /metrics|   forwards JSON + SSE
+        └─────────────────┬─────────────────┘
+                          | (HTTP, one per worker)
+          ┌───────────────┴───────────────┐
+          ▼                               ▼
+  worker 0 (NPU 0)               worker 1 (NPU 1) ...
+   serve_full.py                  serve_full.py
+   AsyncServer (single-threaded    (torch_npu is main-thread-only;
+   asyncio loop)                   one SlottedScheduler per worker)
+          |
+   SlottedScheduler  — persistent batched recurrent state
+   (grow on join, swap-remove on leave, NO per-step cat)
+          |
+   RWKV7Engine._step — one batched decode step
+          |
+   rwkv7_ascend_v3.cpp (C++ forward, libtorch/aclnn) — the NPU analog of
+          |                       Albatross's hand-tuned CUDA kernel
+   CANN 8.5.0 / 910B
 ```
 
-RWKV7 is **state-based (RNN), not attention-based** — so continuous batching is
-simpler than vLLM: there's no PagedAttention, no KV-cache block management. Each
-sequence carries a recurrent state `(sa, xp, xf, vf)`; the scheduler packs all
-active sequences' states into one batched tensor, runs **one** C++ forward, samples
-per-sequence, and splits the evolved states back out.
+RWKV7 is **state-based (RNN)**, so continuous batching is *simpler* than vLLM:
+no PagedAttention, no KV-cache blocks. Each sequence carries a recurrent state;
+the scheduler packs all active sequences' states into one batched tensor, runs one
+C++ forward, samples per-sequence, and splits the evolved states back out.
+
+Single-threaded per worker: `torch_npu` is **main-thread-only** (a worker thread
+hangs), so each worker runs one asyncio loop with the decode step on it. Scale-out
+is **multi-worker** (one per NPU), not multithreading.
 
 ---
 
-## Components (`serving/`)
+## Components (`serving/` + `tests/`)
 
 | file | role |
 |---|---|
-| `serve_engine.py` | `RWKV7Engine`: loads model + weights, compiles the C++ forward, exposes `generate()` (prefill per-seq → stack states → batched decode). |
-| `serve_full.py` | **The server.** `SlottedScheduler` (persistent state, no per-step cat) + `SamplerCfg`/`sample_rows` (greedy/top-k/top-p/temperature) + `AsyncServer` (single-threaded loop) + FastAPI `/v1/completions` + `/health`. Run with `--serve`. |
-| `serve_scheduler.py` | Earlier cat-per-step scheduler (superseded by `SlottedScheduler` in `serve_full.py`; kept for reference — shows the design evolution). |
-| `engine_probe.py` | Correctness probe: verifies the C++ forward **persists recurrent state across steps** and generates bit-exact vs HF-native. |
-
-The C++ forward lives at `perf/rwkv7_ascend_v3.cpp` (shared with the Phase-1 perf module).
+| `serve_engine.py` | `RWKV7Engine`: loads model + weights, compiles the C++ forward, batched decode. |
+| `sampler.py` | `SamplerCfg` + `sample_rows` (greedy batched fast-path / temperature / top_k / top_p). Separated so it's CI-testable without NPU/rwkv7_hf. |
+| `serve_full.py` | A worker: `SlottedScheduler` (persistent state, no per-step cat) + `AsyncServer` (single-threaded loop) + FastAPI `/v1/completions` (JSON + SSE) + stop strings + error isolation + timeouts + warmup. |
+| `serve_router.py` | Front-end router: fans `/v1/completions` to N workers (least-in-flight), forwards JSON + SSE, `/health`, `/metrics`. |
+| `run_cluster.sh` | Launcher: N workers (one per NPU via `ASCEND_RT_VISIBLE_DEVICES`) + the router. |
+| `serve_scheduler.py` | Earlier cat-per-step scheduler (superseded by `SlottedScheduler`; kept as reference). |
+| `engine_probe.py` | Correctness probe: C++ forward persists recurrent state across steps, bit-exact vs HF-native. |
+| `Dockerfile` | CANN 8.5.0 base + deps + framework + rwkv7_hf + vocab (NPU devices mounted at run). |
+| `QUANT.md` | Quantization investigation + PoC (W8A16 measured **not faster** on this stack). |
+| `perf/rwkv7_ascend_v3.cpp` | The C++ forward, shared with the Phase-1 perf module. |
+| `tests/` | 21 pytest tests (see below). |
 
 ---
 
-## The C++ state-writeback fix (correctness bug found + fixed)
+## The C++ state-writeback fix (a latent correctness bug)
 
-The original `rwkv7_ascend_v3.cpp` `RWKV7_BODY` macro computed the recurrent state
-correctly for a **single** step (cos=1.0 vs HF-native) — but **never wrote it back**:
-
-```cpp
-auto state = state_all[li];          // local C++ variable (a view)
-...
-state = state * w_exp + state @ ab + vk;   // REASSIGNS the local — Python's tensor never updates
-```
-
-So multi-step generation collapsed: state stayed at its initial value every step and
-the model fell into a fixed cycle (`33,2973,144,...`). `bench_batch` missed this
-because it re-zeroed state every call.
-
-The fix adds three in-place writebacks **after** the state is consumed:
-
-```cpp
-state = state * w_exp.view(...) + at::matmul(state, ab...) + vk...;
-state_all[li].copy_(state);     // persist recurrent state
-...
-xpa_all[li].copy_(h);           // persist attn x_prev (after x_prev is read)
-...
-xpf_all[li].copy_(h2);          // persist ffn x_prev (after xpf is read)
-```
-
-(`v_first` needs no persistence — it's overwritten at layer 0 every step.)
-
-After the fix, greedy `[0..15] -> [16,17,18,21,18,21,18,21]` is **bit-exact** vs
-HF-native. This unblocks correct multi-step generation.
+The original `rwkv7_ascend_v3.cpp` computed the recurrent state correctly for a
+**single** step (cos=1.0 vs HF-native) but **never wrote it back** — the macro
+reassigned a local C++ variable instead of the Python-passed tensor, so state
+didn't persist and multi-step generation collapsed to a fixed cycle. (Single-step
+cos=1.0 masked it; `bench_batch` re-zeroed state each call.) The fix adds three
+in-place writebacks: `state_all[li].copy_(state)`, `xpa_all[li].copy_(h)`,
+`xpf_all[li].copy_(h2)`. (`v_first` needs none — overwritten at layer 0 each step.)
+After the fix, greedy `[0..15]→[16,17,18,21,18,21,18,21]` is bit-exact vs HF-native.
 
 ---
 
 ## Verified results (910B3, CANN 8.5.0, torch_npu 2.9.0)
 
-- **Correctness**: greedy generation bit-exact vs HF-native; slotted scheduler
-  (mid-flight join + staggered completion) bit-exact vs standalone (`ALL_MATCH`).
-- **Throughput** (`serve_full.py` `SlottedScheduler`, 0.1B, 64 concurrent x 32 new
-  tokens): **3666 aggregate tok/s** (> 2x Albatross ~ 3000). The earlier
-  cat-per-step scheduler measured 3284; the slotted buffer (no per-step cat) +
-  batched-greedy fast-path recovered the overhead.
-- **All 6 model sizes** (0.1B-13.3B) benchmarked via the C++ forward; leading
-  Albatross in batched aggregate at every size (lead grows with model size).
-- **Live API**: 3 concurrent `/v1/completions` requests on 1.5B -> coherent text
-  (greedy story + sampled poem).
+- **Correctness**: greedy bit-exact vs HF-native; scheduler (mid-flight join,
+  staggered completion, concurrent batch) bit-exact vs standalone — `ALL_MATCH`.
+- **Throughput**: 64 concurrent × 32 new tokens = **3666 aggregate tok/s**
+  (>2× Albatross ≈ 3000); all 6 model sizes (0.1B–13.3B) lead in batched aggregate.
+- **Live API**: 3 concurrent `/v1/completions` on 1.5B → coherent text (greedy
+  story + sampled poem).
+- **Quantization PoC**: W8A16 via `npu_weight_quant_batchmatmul` is correct
+  (cos=1.0) but **measured 0.6–0.89× (slower)** — fp16 matmul is already
+  memory-BW-bound + heavily tuned. Not worth wiring in (see `QUANT.md`).
+- **Test suite**: 21/21 pass (10 NPU integration + 11 sampler unit) in ~29s.
 
 ---
 
-## Quick start (on a 910B box)
+## Production readiness (~70%)
 
-Pre-reqs: CANN env sourced; the HF adapter (`rwkv7_hf/`, from
-`rwkv7-hf-adapter-ascend`) + the RWKV vocab (`rwkv_vocab_v20230424.txt`) + the model
-checkpoint on disk; `fastapi`+`uvicorn` installed.
+| Dimension | Status |
+|---|---|
+| Core engine correctness | 🟢 strong (bit-exact, 6 sizes) |
+| Continuous batching | 🟢 strong (dynamic, bit-exact) |
+| Serving API | 🟢 `/v1/completions` + streaming + stop + sampler (no chat/tools/structured) |
+| Aggregate throughput | 🟢 >2× Albatross, all sizes |
+| Reliability | 🟡 error isolation + timeouts + warmup (no rate-limit/auth/graceful) |
+| Tests + CI | 🟡 21 pytests + GitHub Actions (no load tests; CI has no NPU) |
+| Observability | 🟡 `/health` + `/metrics` (no logging/tracing) |
+| Packaging | 🟡 Dockerfile written (untested — no Docker on 910B3) |
+| Scalability | 🔴 multi-worker architecture ready, but multi-NPU unverified (910B3 has 1 NPU) |
+| B=1 latency | 🔴 launch-overhead-bound (needs AscendC GEMV-Cube, multi-month) |
+| Quantization | 🔴 investigated, doesn't help on this stack |
 
+**Hard-blocked (need other infra/scope, not "incomplete"):** multi-NPU verification
+(needs a multi-NPU box), Docker build/test (needs a Docker+NPU host), AscendC
+GEMV-Cube (multi-month research).
+
+---
+
+## Quick start
+
+**Single worker (dev):**
 ```bash
-# 1. one-time: make the C++ forward reachable at the path serve_engine expects
-ln -sf /path/to/vllm-rwkv-ascend/perf/rwkv7_ascend_v3.cpp /root/rwkv7_ascend_v3.cpp
-
-# 2. start the server (1.5B example)
-setsid bash -c '
-  source /usr/local/Ascend/cann-8.5.0/set_env.sh
-  cd /path/to/rwkv7-hf-adapter-ascend     # so rwkv7_hf/ is importable
-  PYTHONPATH=/path/to/vllm-rwkv-ascend/serving:/path/to/rwkv7-hf-adapter-ascend \
-  python serve_full.py --model <1.5b-model-dir> --H 32 --N 64 --L 24 --serve
-' </dev/null >/tmp/sf.log 2>&1 &
-
-# 3. use it
-curl localhost:8000/v1/completions \
-  -H "Content-Type: application/json" \
+source /usr/local/Ascend/cann-8.5.0/set_env.sh
+cd /root/rwkv7-ascend   # so rwkv7_hf/ + the cpp are reachable
+RWKV7_REQ_TIMEOUT=120 python serve_full.py \
+  --model <model-dir> --H 32 --N 64 --L 24 --port 8001
+curl localhost:8001/v1/completions -H 'Content-Type: application/json' \
   -d '{"prompt":"Once upon a time","max_tokens":50,"temperature":0.7,"top_k":40}'
 ```
 
-> **Note on paths**: `serve_engine.py` currently hardcodes the 910B3 layout
-> (`sys.path.insert(0,"/root/rwkv7-ascend")`, cpp source `/root/rwkv7_ascend_v3.cpp`).
-> Adjust to your environment (or export `PYTHONPATH` + symlink the cpp). The model
-> dims `--H/--N/--L` must match the checkpoint (0.1B: 12/64/12, 0.4B: 16/64/24,
-> 1.5B: 32/64/24, 2.9B: 40/64/32, 7.2B: 64/64/32, 13.3B: 64/64/61).
+**Cluster (router + N workers, one per NPU):**
+```bash
+RWKV7_WORKERS_N=1 RWKV7_MODEL=<model-dir> RWKV7_H=32 RWKV7_L=24 bash run_cluster.sh
+# -> router on :8000 forwarding to worker(s) on :8001+
+curl localhost:8000/v1/completions ...
+curl localhost:8000/metrics
+```
+
+**Docker:** build + run with NPU devices + a model mounted — see `Dockerfile`
+header for the `docker run` command.
+
+> **Paths** are configurable via env (`RWKV7_HF_PATH`, `RWKV7_CPP_PATH`,
+> `RWKV7_DEVICE`, `RWKV7_VOCAB`, `RWKV7_REQ_TIMEOUT`, `RWKV7_MAX_TOKENS_CAP`).
+> Model dims `--H/--N/--L` must match the checkpoint (0.1B 12/64/12, 0.4B 16/64/24,
+> 1.5B 32/64/24, 2.9B 40/64/32, 7.2B 64/64/32, 13.3B 64/64/61).
 
 ---
 
-## Known limitations (production polish, not core functionality)
+## Tests
 
-- The single-threaded loop blocks ~15ms/step during decode (torch_npu is
-  main-thread-only — a worker thread hangs). Throughput under high concurrency would
-  need a **multi-process** design, not multi-thread.
-- ~4299 tok/s theoretical (raw `bench_batch`) vs 3666 achieved here — the gap is
-  per-step Python overhead (token-tensor build, `argmax().tolist()`); a slotted
-  "next-token" tensor buffer would close it.
-- No EOS / stop-string handling (generation runs to `max_tokens`).
-- One model per worker; model is loaded once at startup.
-- Greedy + temperature/top-k/top-p only (no beam, no structured output).
+```bash
+# on 910B3 (runs all 21: 10 NPU integration + 11 sampler unit)
+python -m pytest tests/ -v
+# in CI (GitHub Actions, no NPU): 11 sampler unit tests run, 10 integration auto-skip
+```
 
 ---
 
 ## Relationship to the rest of this repo
 
-- `rwkv7_npu_ops.py` / `device_patch.py` / `bootstrap.py` — the **op-shim** that lets
-  upstream vllm-rwkv CUDA ops run on NPU (Phase 1, the vllm port). Independent of this
-  serving framework — kept for the day vllm-ascend catches up to vllm-rwkv's base.
-- `perf/rwkv7_ascend_v3.cpp` — the C++ forward, **shared** by the Phase-1 perf module
-  and this serving framework (the state-writeback fix benefits both).
-- `serving/` (this directory) — the self-contained serving engine, the pragmatic path
-  to a live RWKV7 NPU service today.
+- `rwkv7_npu_ops.py` / `device_patch.py` / `bootstrap.py` — the **op-shim** (Phase 1,
+  the vLLM port). Independent of this serving framework; kept for the day
+  vllm-ascend catches up to vllm-rwkv's base.
+- `perf/rwkv7_ascend_v3.cpp` — the C++ forward, **shared** by the Phase-1 perf
+  module and this serving framework (the state-writeback fix benefits both).
+- `serving/` (this directory) — the self-contained serving engine, the pragmatic
+  path to a live RWKV7 NPU service today.

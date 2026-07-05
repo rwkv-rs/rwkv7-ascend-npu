@@ -5,6 +5,17 @@ call** (via `at::` / aclnn ops), eliminating the ~15-op Python dispatch per laye
 that makes the pure-PyTorch shim slow. Proven on 910B: **323 tok/s (B=1),
 cos=1.0** vs the HF-native reference.
 
+## State writeback (multi-step correctness)
+
+The `RWKV7_BODY` macro must write the evolved recurrent state back into the
+Python-passed tensors, **after** they've been read — three in-place copies per
+layer: `state_all[li].copy_(state)` (recurrent WKV state), `xpa_all[li].copy_(h)`
+(attn input), `xpf_all[li].copy_(h2)` (ffn input). (`v_first` needs none —
+overwritten at layer 0 each step.) Without these, the macro's local reassignment of
+`state` is lost and **multi-step generation collapses to a fixed cycle** (single-step
+cos=1.0 still holds, which masked the bug — `bench_batch` re-zeroed state each call).
+This fix is what makes the forward usable for actual generation / serving.
+
 ## When to use which path
 
 | Path | File | Speed | Use |
