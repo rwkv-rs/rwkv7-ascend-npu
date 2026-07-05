@@ -1,46 +1,52 @@
-# Quantization investigation (int8 / int4 for RWKV7 on Ascend)
+# Quantization investigation + PoC (int8 / int4 for RWKV7 on Ascend)
 
-**Status: investigated — feasible but a ~2-week effort, NOT a quick PoC. Deferred.**
-(out of the 路-A production loop's completable scope, same category as AscendC GEMV-Cube.)
+**Status: PoC'd — W8A16 is NOT faster on this stack. Quant is not worth pursuing here.**
 
-## What we checked (910B3, torch_npu 2.9.0, CANN 8.5.0)
+> Correction to the first draft: torch.ops.npu **does** have quant ops (292 ops,
+> including `npu_weight_quant_batchmatmul`, `npu_anti_quant`, `npu_dynamic_quant`,
+> `npu_group_quant`). The earlier "zero high-level quant ops" claim was wrong — I'd
+> checked `torch.npu` attrs, not `torch.ops.npu`.
 
-- `torch.ao.quantization` imports — but it has **no Ascend int8 backend**; the
-  quantized ops don't dispatch to a fast NPU kernel.
-- `torch.npu` exposes **zero** quant/int8 attributes (no `aclnnMatmul` int8 surface).
-- int8 matmul via `a.float() @ b.float()` works — but that's a fake (casts back to
-  fp32, no throughput win).
+## The op + correct layout
 
-So **there is no high-level "quantize-and-go" path** on this stack.
+`torch.ops.npu.npu_weight_quant_batchmatmul(x, weight, antiquant_scale)` is the
+W8A16 path (fp16 activation × int8 weight, fused dequant). Correct convention:
 
-## The real path (W8A16 — int8 weights, fp16 activations)
+- `x`:        fp16 `[B, in]`
+- `weight`:    **int8 `[in, out]`** (transposed vs PyTorch linear's `[out, in]`)
+- `antiquant_scale`: fp16 `[out]` (per-output-channel)
 
-RWKV7 is memory-bound (small per-token compute, lots of weight traffic), so
-**weight-only int8** is the win — same conclusion as on Blackwell
-(`mm8`/`mm4` affine quant sped memory-bound layers 1.5–2× there).
+Per-output-channel int8 weight = `round(w / scale)` where `scale[o] = max|w[o,:]|/127`.
+Reconstruction `cos = 1.0` vs fp16 linear — the op is correct.
 
-To get it on Ascend:
-1. **Offline-quantize** the fp16 projection weights (`at::linear` weights: r/k/v/o,
-   ffn key/value, the LoRA w/a/v) to int8 + per-channel scales.
-2. Replace each `at::linear(x, w)` in `rwkv7_ascend_v3.cpp` with an **aclnn int8
-   matmul** (weight int8, activation fp16, fused dequant) — the aclnn C API, not a
-   Python knob.
-3. Verify accuracy (cos vs fp16, expect ≥0.99) and measure the speedup on the
-   memory-bound sizes.
+## Measured speedup (910B3, CANN 8.5.0, torch_npu 2.9.0) — fp16 linear vs W8A16
 
-This is real low-level CANN engineering: ~30 linears in the cpp, aclnn int8
-signature research, scale handling, accuracy + perf validation. **~2 weeks.**
+```
+H=768  (0.1B-like):  B=1 0.88x | B=8 0.92x | B=64 0.92x        (launch-overhead-bound)
+H=4096 (7B-like, 32MB->16MB weight):
+  B=1   fp16 0.024ms  W8A16 0.028ms  0.85x
+  B=8   fp16 0.025ms  W8A16 0.028ms  0.89x
+  B=64  fp16 0.025ms  W8A16 0.041ms  0.60x
+  B=256 fp16 0.047ms  W8A16 0.065ms  0.73x
+```
 
-## Alternative: atb (Ascend Transformer Boost)
-
-`vllm-ascend` serves quantized models via **atb** (libatb.so, ships with the CANN
-image). Wiring our cpp forward into atb's quantized linear is another route — but
-it's a bigger architectural change (atb manages the layer, not us).
+W8A16 is **slower at every size**. The fp16 matmul is already memory-bandwidth-bound
+(0.024ms to read 32MB ≈ 1.3 TB/s ≈ HBM peak) and the CANN fp16 kernel is heavily
+tuned; the W8A16 kernel's overhead + lower optimization exceed the half-traffic
+benefit. (Contrast with Blackwell, where `mm8`/`mm4` *did* speed memory-bound
+layers 1.5-2× — different kernel maturity.)
 
 ## Conclusion
 
-- Feasible: yes. Ascend does int8 (aclnn W8A16 / atb).
-- Quick PoC in the loop: **no** — torch_npu 2.9.0 gives no high-level handle; the
-  first useful step is an aclnn int8 matmul in the cpp, which is the ~2-week item.
-- Deferred from the production loop. Revisit when (a) we accept the 2-week scope,
-  or (b) torch_npu exposes a Python-level W8A16 linear (then it's a small change).
+- W8A16 via `npu_weight_quant_batchmatmul`: correct, but **does not help throughput**
+  on CANN 8.5.0. Spending the ~2 weeks to wire it into the cpp forward would not pay.
+- Remaining (uncertain, not quick): W4A16 (int4 via group-quant), W8A8
+  (`npu_dynamic_quant` + matmul), or atb quantized layers (the vllm-ascend path).
+  Given W8A16 already loses to fp16 here, these are unlikely to win without a better
+  kernel; not worth the effort now.
+- **Defer until** CANN ships a faster W8A16/W4A16 kernel, or until we adopt atb
+  (which has its own tuned quant path). Re-measure then.
+
+Memory benefit note: int8 weights would still halve **memory footprint** (helpful
+for fitting 13.3B on smaller cards) even with no throughput win — so it's not
+useless, just not a speed win on this stack.
