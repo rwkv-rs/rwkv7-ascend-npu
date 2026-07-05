@@ -3,6 +3,13 @@
 NPU (Huawei Ascend 910B) adaptation of [`rwkv-rs/vllm-rwkv`](https://github.com/rwkv-rs/vllm-rwkv)
 — the Albatross faster3a RWKV-7 engine ported into vLLM.
 
+> **Update (post-v0.1.0): vLLM serving on Ascend is blocked** by upstream version lag
+> (vllm-rwkv base = vllm **v0.23** vs vllm-ascend newest **0.22.1** which itself needs
+> CANN 9.0.0; we're on CANN 8.5.0). Rather than wait, we built a **self-contained
+> RWKV7 continuous-batch serving engine** — live OpenAI-compatible `/v1/completions`,
+> dynamic batching, top-k/top-p/temperature, at **>2× Albatross** aggregate throughput.
+> See **[`serving/SERVING.md`](serving/SERVING.md)**.
+
 ## Design: additive layer, zero upstream edits
 
 We track `rwkv-rs/vllm-rwkv` as the `upstream` remote and **edit none of its
@@ -26,9 +33,9 @@ one-line update.
 
 | Phase | Goal | Status |
 |---|---|---|
-| 1 | RWKV-7 model produces correct logits on NPU (shim vs HF-native, cos) | ← this repo now |
-| 2 | Perf: C++ op-coalesced hot path (`rwkv7_ascend_v3.cpp`, 323 tok/s) + continuous batching | next |
-| 3 | Full vLLM serving (OpenAI API) on NPU via `vllm-project/vllm-ascend` | later |
+| 1 | RWKV-7 model produces correct logits on NPU (shim vs HF-native, cos) | ✅ done |
+| 2 | Perf: C++ op-coalesced hot path (`rwkv7_ascend_v3.cpp`, 323 tok/s) + continuous batching | ✅ done (state-writeback bug fixed) |
+| 3 | Full vLLM serving (OpenAI API) on NPU via `vllm-project/vllm-ascend` | ❌ **blocked** — vllm-ascend version lag; own-framework server in [`serving/`](serving/) instead (live, >2× Albatross) |
 
 ## Phase 1 run (on 910B3)
 

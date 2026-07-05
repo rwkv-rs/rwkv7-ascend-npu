@@ -55,14 +55,17 @@ at::Tensor fused_ln(at::Tensor x, at::Tensor w, at::Tensor b, int64_t hidden) {
         auto vk = at::matmul(v.view({B, H, N, 1}), k.view({B, H, 1, N})); \
         auto ab = at::matmul((-kk).view({B, H, N, 1}), (kk * a_sig).view({B, H, 1, N})); \
         state = state * w_exp.view({B, H, 1, N}).to(at::kFloat) + at::matmul(state, ab.to(at::kFloat)) + vk.to(at::kFloat); \
+        state_all[li].copy_(state); \
         auto out = at::matmul(state.to(dtype), r.view({B, H, N, 1})).view({B, hidden}); \
         out = at::group_norm(out, H, g_norm_w_list[li], g_norm_b_list[li], (double)(N) * 1e-5); \
         auto sk = (r.view({B, H, N}) * k.view({B, H, N}) * r_k_list[li].view({1, H, N})).sum(-1, true); \
         out = out + (sk * v.view({B, H, N})).view({B, hidden}); \
         auto attn_out = at::linear(out * g_sig, o_weights[li]); \
+        xpa_all[li].copy_(h); \
         x = residual + attn_out; \
         auto h2 = fused_ln(x, ffn_norm_w[li], ffn_norm_b[li], hidden); \
         auto xx_ffn = xpf_all[li] - h2; \
+        xpf_all[li].copy_(h2); \
         auto k_ffn = h2 + xx_ffn * ffn_xk_list[li].view({1, hidden}); \
         auto ffn_out = at::linear(at::relu(at::linear(k_ffn, ffn_key_weights[li])).pow(2), ffn_value_weights[li]); \
         x = x + ffn_out; \
