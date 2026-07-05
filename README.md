@@ -10,6 +10,15 @@ NPU (Huawei Ascend 910B) adaptation of [`rwkv-rs/vllm-rwkv`](https://github.com/
 > dynamic batching, top-k/top-p/temperature, at **>2× Albatross** aggregate throughput.
 > See **[`serving/SERVING.md`](serving/SERVING.md)**.
 
+## Docs
+
+- **[`serving/SERVING.md`](serving/SERVING.md)** — the serving framework (what it is, how to run, current state)
+- **[`ARCHITECTURE.md`](ARCHITECTURE.md)** — internals deep-dive (request lifecycle, scheduler, the C++ forward)
+- **[`CONTRIBUTING.md`](CONTRIBUTING.md)** — dev setup, running tests, conventions
+- **[`serving/QUANT.md`](serving/QUANT.md)** — quantization investigation (W8A16 measured not faster)
+- **[`RELEASE_NOTES_v0.2.0.md`](RELEASE_NOTES_v0.2.0.md)** — serving framework release (latest); [`v0.1.0`](RELEASE_NOTES_v0.1.0.md) (op-shim)
+- **[`LICENSE`](LICENSE)** — Apache 2.0
+
 ## Design: additive layer, zero upstream edits
 
 We track `rwkv-rs/vllm-rwkv` as the `upstream` remote and **edit none of its
