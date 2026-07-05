@@ -14,6 +14,8 @@ if [ ! -x "$PYBIN" ]; then
   /usr/local/python3.11.14/bin/python3.11 -m venv "$VENV"
 fi
 $PYBIN -m pip install --upgrade pip $MIRROR || true
+# torch_npu imports yaml at import time; install its python deps first.
+$VENV/bin/pip install --no-cache-dir $MIRROR pyyaml numpy
 
 echo "=== torch 2.8.0 + torch_npu 2.8.0.post2 ==="
 $VENV/bin/pip install --no-cache-dir $MIRROR "torch==2.8.0"
@@ -29,6 +31,7 @@ if [ ! -d /data/sgl-kernel-npu ]; then
   git clone --recursive https://github.com/sgl-project/sgl-kernel-npu.git /data/sgl-kernel-npu
 fi
 cd /data/sgl-kernel-npu
+source $VENV/bin/activate   # build.sh / cmake invoke `python3`; must resolve to the venv (has torch)
 bash build.sh
 $VENV/bin/pip install --no-cache-dir output/sgl_kernel_npu*.whl
 
