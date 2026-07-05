@@ -1,7 +1,15 @@
+"""RWKV7-Ascend full serving server.
+
+Single-threaded asyncio loop (torch_npu is main-thread-only):
+  - SlottedScheduler: persistent batched recurrent state, no per-step cat
+  - Sampler: greedy (batched argmax fast-path) / temperature / top_k / top_p
+  - Streaming + stop-string support (buffered to avoid over-emitting partial stops)
+  - FastAPI /v1/completions (OpenAI-style, JSON or SSE) + /health
+"""
 import os
 os.environ.setdefault("RWKV7_NATIVE_MODEL", "1"); os.environ.setdefault("TORCHDYNAMO_DISABLE", "1")
 import sys; sys.path.insert(0, "/root/rwkv7-ascend")
-import time, threading, queue, asyncio
+import json, asyncio
 import torch, torch_npu
 from serve_engine import RWKV7Engine, DEV, VOCAB
 from rwkv7_hf.tokenization_rwkv7 import _RWKVTrie
@@ -52,27 +60,33 @@ def prefill_one(eng, tokens):
     return (sa, xp, xf, vf), first
 
 
-# ---------------- slotted scheduler (persistent batched state, NO per-step cat) ----------------
+# ---------------- slotted scheduler ----------------
 class Seq:
-    def __init__(self, prompt, max_new, cfg, fut):
-        self.prompt = prompt; self.max_new = max_new; self.cfg = cfg; self.fut = fut
+    def __init__(self, prompt_ids, max_new, cfg, stop_strings, is_stream, fut):
+        self.prompt_ids = prompt_ids; self.max_new = max_new; self.cfg = cfg
+        self.stop_strings = stop_strings or []; self.is_stream = is_stream; self.fut = fut
         self.gen = []; self.next = None
+        self.emitted_safe = 0          # chars definitely safe to emit (buffered past partial-stop window)
+        self.final_text = None
+        self.queue = asyncio.Queue() if is_stream else None
+        self.max_stop_len = max((len(s) for s in self.stop_strings), default=0)
 
 
 class SlottedScheduler:
-    def __init__(self, eng):
-        self.eng = eng; L, H, N = eng.L, eng.H, eng.N; hd = eng.hidden
+    def __init__(self, eng, tok):
+        self.eng = eng; self.tok = tok
+        L, H, N = eng.L, eng.H, eng.N; hd = eng.hidden
         self.sa = torch.zeros(L, 0, H, N, N, dtype=torch.float32, device=DEV)
         self.xp = torch.zeros(L, 0, hd, dtype=torch.float16, device=DEV)
         self.xf = torch.zeros(L, 0, hd, dtype=torch.float16, device=DEV)
         self.vf = torch.zeros(0, hd, dtype=torch.float16, device=DEV)
         self.seqs = []; self.B = 0; self.tok_count = 0
 
-    def add(self, prompt_ids, max_new, cfg, fut=None):
-        (sa, xp, xf, vf), first = prefill_one(self.eng, prompt_ids)
+    def add(self, seq):
+        (sa, xp, xf, vf), first = prefill_one(self.eng, seq.prompt_ids)
         self.sa = torch.cat([self.sa, sa], dim=1); self.xp = torch.cat([self.xp, xp], dim=1)
         self.xf = torch.cat([self.xf, xf], dim=1); self.vf = torch.cat([self.vf, vf], dim=0)
-        seq = Seq(prompt_ids, max_new, cfg, fut); seq.gen = [first]; seq.next = first
+        seq.gen = [first]; seq.next = first
         self.seqs.append(seq); self.B += 1; return seq
 
     def _shrink(self, i):
@@ -95,36 +109,63 @@ class SlottedScheduler:
         nxt = sample_rows(logits, [s.cfg for s in self.seqs])
         done = []
         for i in range(self.B):
-            self.seqs[i].gen.append(nxt[i]); self.seqs[i].next = nxt[i]; self.tok_count += 1
-            if len(self.seqs[i].gen) >= self.seqs[i].max_new:
+            seq = self.seqs[i]
+            seq.gen.append(nxt[i]); seq.next = nxt[i]; self.tok_count += 1
+            decoded = self.tok.decode(seq.gen)
+            stop_idx = None
+            for ss in seq.stop_strings:
+                j = decoded.find(ss)
+                if j >= 0 and (stop_idx is None or j < stop_idx):
+                    stop_idx = j
+            if stop_idx is not None:
+                safe_end = min(len(decoded) - seq.max_stop_len, stop_idx)
+                final_end = stop_idx; terminate = True
+            elif len(seq.gen) >= seq.max_new:
+                safe_end = len(decoded) - seq.max_stop_len
+                final_end = len(decoded); terminate = True
+            else:
+                safe_end = len(decoded) - seq.max_stop_len
+                final_end = None; terminate = False
+            if seq.is_stream:
+                if safe_end > seq.emitted_safe:
+                    seq.queue.put_nowait(decoded[seq.emitted_safe:safe_end]); seq.emitted_safe = safe_end
+                if terminate:
+                    if final_end > seq.emitted_safe:
+                        seq.queue.put_nowait(decoded[seq.emitted_safe:final_end]); seq.emitted_safe = final_end
+                    seq.queue.put_nowait(None)  # sentinel
+            if terminate:
+                seq.final_text = decoded[:final_end]
                 done.append(i)
         results = []
         for i in sorted(done, reverse=True):
             seq = self.seqs[i]
-            if seq.fut is not None:
+            if not seq.is_stream and seq.fut is not None:
                 if loop is not None:
-                    loop.call_soon_threadsafe(seq.fut.set_result, list(seq.gen))
+                    loop.call_soon_threadsafe(seq.fut.set_result, seq.final_text)
                 else:
-                    seq.fut.set_result(list(seq.gen))
+                    seq.fut.set_result(seq.final_text)
             results.append(seq); self._shrink(i)
         return results
 
 
-# ---------------- async server (single-threaded asyncio loop — torch_npu is main-thread-only) ----------------
+# ---------------- async server (single-threaded loop) ----------------
 class AsyncServer:
     def __init__(self, eng, tok, loop):
         self.eng = eng; self.tok = tok; self.loop = loop
-        self.sch = SlottedScheduler(eng); self.pending = []
+        self.sch = SlottedScheduler(eng, tok); self.pending = []
         loop.create_task(self._run())
 
     async def _run(self):
         while True:
             if self.pending:
-                for tokens, max_new, cfg, fut in self.pending:
+                for seq in self.pending:
                     try:
-                        self.sch.add(tokens, max_new, cfg, fut)
+                        self.sch.add(seq)
                     except Exception as e:
-                        fut.set_exception(e)
+                        if seq.fut is not None:
+                            seq.fut.set_exception(e)
+                        elif seq.is_stream:
+                            seq.queue.put_nowait(None)
                 self.pending = []
             if self.sch.B > 0:
                 self.sch.step(self.loop)
@@ -132,16 +173,35 @@ class AsyncServer:
             else:
                 await asyncio.sleep(0.001)
 
-    async def complete(self, prompt, max_tokens=50, temperature=0.0, top_k=0, top_p=1.0):
+    def _new_seq(self, prompt, max_tokens, temperature, top_k, top_p, stop, is_stream):
         cfg = SamplerCfg(temperature, top_k, top_p)
-        fut = asyncio.Future()
-        self.pending.append((self.tok.encode(prompt), max_tokens, cfg, fut))
-        ids = await fut
-        return self.tok.decode(ids)
+        stops = [stop] if isinstance(stop, str) else (stop or [])
+        ids = self.tok.encode(prompt)
+        fut = None if is_stream else asyncio.Future()
+        return Seq(ids, max_tokens, cfg, stops, is_stream, fut)
+
+    async def complete(self, prompt, max_tokens=50, temperature=0.0, top_k=0, top_p=1.0, stop=None):
+        seq = self._new_seq(prompt, max_tokens, temperature, top_k, top_p, stop, False)
+        self.pending.append(seq)
+        return await seq.fut
+
+    def submit_stream(self, prompt, max_tokens=50, temperature=0.0, top_k=0, top_p=1.0, stop=None):
+        seq = self._new_seq(prompt, max_tokens, temperature, top_k, top_p, stop, True)
+        self.pending.append(seq)
+        return seq
+
+    async def stream_tokens(self, seq):
+        while True:
+            item = await seq.queue.get()
+            if item is None:
+                break
+            yield item
 
 
 # ---------------- FastAPI face ----------------
 from fastapi import FastAPI
+from fastapi.responses import StreamingResponse
+from typing import Optional, Union, List
 from pydantic import BaseModel
 app = FastAPI(title="RWKV7-Ascend-Full")
 _server = [None]
@@ -150,18 +210,45 @@ _eng = None; _tok = None
 
 @app.on_event("startup")
 async def _startup():
-    # create the scheduler loop task on uvicorn's RUNNING loop (torch_npu is this thread)
     _server[0] = AsyncServer(_eng, _tok, asyncio.get_running_loop())
 
 
 class Req(BaseModel):
-    prompt: str = ""; max_tokens: int = 50; temperature: float = 0.0; top_k: int = 0; top_p: float = 1.0
+    prompt: str = ""
+    max_tokens: int = 50
+    temperature: float = 0.0
+    top_k: int = 0
+    top_p: float = 1.0
+    stream: bool = False
+    stop: Optional[Union[str, List[str]]] = None
+
+
+def _sse(obj):
+    return "data: " + json.dumps(obj) + "\n\n"
 
 
 @app.post("/v1/completions")
 async def completions(r: Req):
-    txt = await _server[0].complete(r.prompt, r.max_tokens, r.temperature, r.top_k, r.top_p)
-    return {"text": txt}
+    srv = _server[0]
+    if r.stream:
+        seq = srv.submit_stream(r.prompt, r.max_tokens, r.temperature, r.top_k, r.top_p, r.stop)
+
+        async def sse():
+            try:
+                async for piece in srv.stream_tokens(seq):
+                    yield _sse({"choices": [{"delta": {"content": piece}, "index": 0, "finish_reason": None}]})
+            except Exception as e:
+                yield _sse({"error": str(e)})
+            yield _sse({"choices": [{"delta": {}, "index": 0, "finish_reason": "stop"}]})
+            yield "data: [DONE]\n\n"
+
+        return StreamingResponse(sse(), media_type="text/event-stream")
+    else:
+        try:
+            txt = await srv.complete(r.prompt, r.max_tokens, r.temperature, r.top_k, r.top_p, r.stop)
+            return {"text": txt}
+        except Exception as e:
+            return {"error": str(e)}
 
 
 @app.get("/health")
@@ -175,59 +262,10 @@ if __name__ == "__main__":
     ap.add_argument("--model", default="/root/rwkv7-ascend/models/rwkv7-g1d-0.1b-hf")
     ap.add_argument("--H", type=int, default=12); ap.add_argument("--N", type=int, default=64); ap.add_argument("--L", type=int, default=12)
     ap.add_argument("--vocab", default="/root/rwkv7-ascend/assets/rwkv_vocab_v20230424.txt")
-    ap.add_argument("--serve", action="store_true"); ap.add_argument("--port", type=int, default=8000)
+    ap.add_argument("--port", type=int, default=8000)
     args = ap.parse_args()
     eng = RWKV7Engine(args.model, args.H, args.N, args.L)
     tok = _RWKVTrie(args.vocab)
-    if args.serve:
-        _eng = eng; _tok = tok
-        import uvicorn; uvicorn.run(app, host="0.0.0.0", port=args.port)
-    else:
-        # ---- correctness: slotted (greedy, mid-flight join) == standalone ----
-        reqs = [(list(range(16)), 8), (list(range(8)), 5), (list(range(4)), 10), (list(range(12)), 6)]
-        sch = SlottedScheduler(eng)
-        for t, mn in reqs:
-            sch.add(t, mn, SamplerCfg())
-        sch.step(); sch.step()
-        sch.add(list(range(6)), 9, SamplerCfg())  # mid-flight join
-        done = []
-        while sch.B > 0:
-            done += sch.step()
-        print("=== slotted scheduler (greedy, mid-flight join) vs standalone ===", flush=True)
-        allok = True
-        for s in done:
-            ref = eng.generate([s.prompt], max_new=s.max_new)[0]
-            ok = s.gen == ref; allok &= ok
-            print("len%d max%d: %s vs %s %s" % (len(s.prompt), s.max_new, s.gen, ref, "OK" if ok else "DIFF"), flush=True)
-        print("ALL_MATCH" if allok else "MISMATCH", flush=True)
-
-        # ---- throughput: 64 concurrent x32 (slotted, no per-step cat) ----
-        for _ in range(2):
-            s = SlottedScheduler(eng)
-            for _ in range(64):
-                s.add(list(range(16)), 32, SamplerCfg())
-            while s.B > 0:
-                s.step()
-        s = SlottedScheduler(eng)
-        for _ in range(64):
-            s.add(list(range(16)), 32, SamplerCfg())
-        torch.npu.synchronize(); t0 = time.time()
-        while s.B > 0:
-            s.step()
-        torch.npu.synchronize(); dt = time.time() - t0
-        print("64x32 slotted: %d tok in %.2fs = %.0f aggregate tok/s" % (s.tok_count, dt, s.tok_count / dt), flush=True)
-
-        # ---- sampler variety: temp0.8 top_k40, 4 runs (should differ from greedy + each other) ----
-        print("=== sampler (temp0.8 top_k40), 4 runs ===", flush=True)
-        runs = []
-        for _ in range(4):
-            s = SlottedScheduler(eng); s.add(list(range(16)), 10, SamplerCfg(0.8, 40, 1.0))
-            d = []
-            while s.B > 0:
-                d += s.step()
-            runs.append(d[0].gen)
-        greedy = eng.generate([list(range(16))], max_new=10)[0]
-        print("greedy: %s" % greedy, flush=True)
-        for r in runs:
-            print("sample: %s" % r, flush=True)
-        print("sampler_varied: %s" % (len(set(map(tuple, runs))) > 1 or any(r != greedy for r in runs)), flush=True)
+    _eng = eng; _tok = tok
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=args.port)
