@@ -76,3 +76,62 @@ def test_scheduler_sampler_varies(eng, tok):
     torch.manual_seed(1)
     b = _run(eng, tok, list(range(16)), 10, SamplerCfg(0.8, 40, 1.0))
     assert a != b or a != tok.decode(eng.generate([list(range(16))], max_new=10)[0])
+
+
+def test_concurrent_batch(eng, tok):
+    """4 seqs stepped together (one batched forward each step) — each bit-exact vs standalone."""
+    sch = SlottedScheduler(eng, tok)
+    prompts = [list(range(16)), list(range(8)), list(range(4)), list(range(12))]
+    futs = []
+    for p in prompts:
+        f = _Fut(); sch.add(Seq(p, 8, SamplerCfg(), [], False, f)); futs.append(f)
+    while sch.B > 0:
+        sch.step()
+    for i, p in enumerate(prompts):
+        assert futs[i].result == tok.decode(eng.generate([p], max_new=8)[0])
+
+
+def test_midflight_join(eng, tok):
+    """a second seq added mid-decode still completes correctly."""
+    sch = SlottedScheduler(eng, tok)
+    f1 = _Fut(); sch.add(Seq(list(range(16)), 8, SamplerCfg(), [], False, f1))
+    sch.step(); sch.step()  # decode a couple steps
+    f2 = _Fut(); sch.add(Seq(list(range(8)), 6, SamplerCfg(), [], False, f2))  # join mid-flight
+    while sch.B > 0:
+        sch.step()
+    assert f1.result == tok.decode(eng.generate([list(range(16))], max_new=8)[0])
+    assert f2.result == tok.decode(eng.generate([list(range(8))], max_new=6)[0])
+
+
+def test_stop_not_found_runs_full(eng, tok):
+    """a stop string absent from the output -> runs to max_new, output unchanged."""
+    ref = tok.decode(eng.generate([list(range(16))], max_new=8)[0])
+    out = _run(eng, tok, list(range(16)), 8, SamplerCfg(), ["ZZZ_UNLIKELY_STOP_ZZZ"])
+    assert out == ref
+
+
+def test_stop_multichar_no_overemit(eng, tok):
+    """multi-char stop is fully excluded (the buffered emitter doesn't leak it)."""
+    ref = tok.decode(eng.generate([list(range(16))], max_new=24)[0])
+    if len(ref) >= 4:
+        stop = ref[1:4]
+        out = _run(eng, tok, list(range(16)), 24, SamplerCfg(), [stop])
+        assert stop not in out, "multi-char stop leaked"
+
+
+def test_streaming_seq_emits_full_text(eng, tok):
+    """an is_stream seq's queue receives the full text (deltas), matching standalone."""
+    sch = SlottedScheduler(eng, tok)
+    seq = Seq(list(range(16)), 8, SamplerCfg(), [], True, None)
+    sch.add(seq)
+    while sch.B > 0:
+        sch.step()
+    pieces = []
+    while not seq.queue.empty():
+        item = seq.queue.get_nowait()
+        if item is not None:
+            pieces.append(item)
+    streamed = "".join(pieces)
+    ref = tok.decode(eng.generate([list(range(16))], max_new=8)[0])
+    assert streamed == ref
+
