@@ -81,13 +81,13 @@ def _op_emb_ln0_bf16_to_f16(emb, weight, bias, eps=1e-5):
     return out.to(torch.float16)
 
 
-def _op_linear_f16(x, weight):
-    # weight is [K,N] (transpose layout) -> x @ weight
+def _op_linear_f16(x, weight, *a):
+    # weight is [K,N] (transpose layout) -> x @ weight  (extra cfg/tile int args ignored)
     return (x.float() @ weight.float()).to(x.dtype)
 
 
-def _op_linear_orig(x, weight_orig):
-    # weight_orig is [N,K] (orig layout) -> x @ weight_orig.T == F.linear
+def _op_linear_orig(x, weight_orig, *a):
+    # weight_orig is [N,K] (orig layout) -> x @ weight_orig.T == F.linear (extra args ignored)
     return F.linear(x, weight_orig)
 
 
@@ -253,10 +253,10 @@ def _wkv_run(state, r, w_in, k, v, a, b, y, elapsed_t, w0=None, *, fp32_state=Fa
         phase = (elapsed_t.to(torch.int64).view(B, 1)
                  + arange_c.view(1, C) + t)                          # [B,C]
         decay = _decay(w_raw, phase).view(B, H, N)                   # over key dim (per channel)
-        ab = (-at).view(B, H, N, 1) * bt.view(B, H, 1, N)           # [B,H,N,N]
+        ab = at.view(B, H, N, 1) * bt.view(B, H, 1, N)              # [B,H,N,N]; a is already neg_kk
         vk = vt.view(B, H, N, 1) * kt.view(B, H, 1, N)
         s32 = s32 * decay.view(B, H, 1, N) + s32 @ ab + vk
-        yt = (s32 * rt.view(B, H, 1, N)).sum(dim=2)                  # [B,H,N]
+        yt = (s32 * rt.view(B, H, 1, N)).sum(dim=3)                  # [B,H,N] contract key dim j
         y[:, t] = yt.reshape(B, C).to(y.dtype)
     state.copy_(s32.to(state.dtype))
     return None

@@ -5,6 +5,7 @@ If upstream renames `first_device` / `zero_state` / an op namespace, only THIS
 file needs a one-line update (low frequency, obvious). This is what keeps
 `git pull upstream` fast-forward / zero-conflict.
 """
+import contextlib
 import torch
 
 
@@ -41,3 +42,30 @@ def apply(device: str = "npu:0"):
 
     # gpu-side embedding avoids the cpu-emb path that calls is_current_stream_capturing
     R.EMB_DEVICE = "gpu"
+
+    # --- torch.cuda.* context managers / queries used inside upstream code ---
+    # `torch.cuda.device(dev)` rejects non-cuda devices; make it a no-op ctx there.
+    _orig_cuda_device = torch.cuda.device
+
+    class _cuda_device_ctx:
+        def __init__(self, dev):
+            self._dev = dev
+            self._inner = None
+
+        def __enter__(self):
+            if isinstance(self._dev, torch.device) and self._dev.type != "cuda":
+                return self
+            try:
+                self._inner = _orig_cuda_device(self._dev)
+                return self._inner.__enter__()
+            except (ValueError, RuntimeError):
+                return self
+
+        def __exit__(self, *exc):
+            if self._inner is not None:
+                return self._inner.__exit__(*exc)
+            return False
+
+    torch.cuda.device = _cuda_device_ctx
+    # never claim stream capture on NPU (upstream uses this to branch emb copy)
+    torch.cuda.is_current_stream_capturing = lambda: False
