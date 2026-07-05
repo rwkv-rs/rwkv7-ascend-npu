@@ -8,7 +8,7 @@ Single-threaded asyncio loop (torch_npu is main-thread-only):
 """
 import os
 os.environ.setdefault("RWKV7_NATIVE_MODEL", "1"); os.environ.setdefault("TORCHDYNAMO_DISABLE", "1")
-import sys; sys.path.insert(0, "/root/rwkv7-ascend")
+import sys; sys.path.insert(0, os.environ.get("RWKV7_HF_PATH", "/root/rwkv7-ascend"))
 import json, asyncio
 import torch, torch_npu
 from serve_engine import RWKV7Engine, DEV, VOCAB

@@ -1,11 +1,11 @@
 import os
 os.environ.setdefault("RWKV7_NATIVE_MODEL","1"); os.environ.setdefault("TORCHDYNAMO_DISABLE","1")
-import sys; sys.path.insert(0,"/root/rwkv7-ascend")
+import sys; sys.path.insert(0, os.environ.get("RWKV7_HF_PATH", "/root/rwkv7-ascend"))
 import torch, torch_npu, time
 from torch.utils.cpp_extension import load
 from rwkv7_hf.configuration_rwkv7 import RWKV7Config
 from rwkv7_hf.native_model import NativeRWKV7ForCausalLM
-DEV="npu:0"; VOCAB=65536
+DEV=os.environ.get("RWKV7_DEVICE", "npu:0"); VOCAB=65536
 
 def _extract(base, hidden):
     rw,kw,vw,ow,fkw,fvw=[],[],[],[],[],[]
@@ -49,7 +49,7 @@ class RWKV7Engine:
         self.base=self.model.model
         self.lm_w_m=self.model.lm_head.weight.data
         self.W,_,self.fnorm_w,self.fnorm_b=_extract(self.base,self.hidden)
-        self.mod=load(name="rwkv7_ascend_v3",sources=["/root/rwkv7_ascend_v3.cpp"],verbose=False,extra_cflags=["-O3","-std=c++17"])
+        self.mod=load(name="rwkv7_ascend_v3",sources=[os.environ.get("RWKV7_CPP_PATH", "/root/rwkv7_ascend_v3.cpp")],verbose=False,extra_cflags=["-O3","-std=c++17"])
         print("[engine] ready",flush=True)
     def _new_state(self,B):
         return (torch.zeros(self.L,B,self.H,self.N,self.N,dtype=torch.float32,device=DEV),
