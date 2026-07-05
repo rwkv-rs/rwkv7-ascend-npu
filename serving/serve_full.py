@@ -14,6 +14,9 @@ import torch, torch_npu
 from serve_engine import RWKV7Engine, DEV, VOCAB
 from rwkv7_hf.tokenization_rwkv7 import _RWKVTrie
 
+REQ_TIMEOUT = float(os.environ.get("RWKV7_REQ_TIMEOUT", "120"))       # per-request max seconds
+MAX_TOKENS_CAP = int(os.environ.get("RWKV7_MAX_TOKENS_CAP", "2048"))
+
 
 # ---------------- sampler ----------------
 class SamplerCfg:
@@ -100,6 +103,20 @@ class SlottedScheduler:
         self.xf = self.xf[:, :-1].contiguous(); self.vf = self.vf[:-1].contiguous()
         self.B -= 1
 
+    def fail_all(self, error):
+        # error isolation: fail every in-flight seq + reset the batch so the loop survives
+        for seq in self.seqs:
+            if seq.fut is not None and not seq.fut.done():
+                seq.fut.set_exception(error)
+            if seq.is_stream and seq.queue is not None:
+                seq.queue.put_nowait(None)
+        L, H, N = self.eng.L, self.eng.H, self.eng.N; hd = self.eng.hidden
+        self.sa = torch.zeros(L, 0, H, N, N, dtype=torch.float32, device=DEV)
+        self.xp = torch.zeros(L, 0, hd, dtype=torch.float16, device=DEV)
+        self.xf = torch.zeros(L, 0, hd, dtype=torch.float16, device=DEV)
+        self.vf = torch.zeros(0, hd, dtype=torch.float16, device=DEV)
+        self.seqs = []; self.B = 0
+
     def step(self, loop=None):
         if self.B == 0:
             return []
@@ -168,7 +185,14 @@ class AsyncServer:
                             seq.queue.put_nowait(None)
                 self.pending = []
             if self.sch.B > 0:
-                self.sch.step(self.loop)
+                try:
+                    self.sch.step(self.loop)
+                except Exception as e:
+                    print("[server] step error, failing in-flight batch: %s" % e, flush=True)
+                    try:
+                        self.sch.fail_all(e)
+                    except Exception:
+                        pass
                 await asyncio.sleep(0)
             else:
                 await asyncio.sleep(0.001)
@@ -178,12 +202,12 @@ class AsyncServer:
         stops = [stop] if isinstance(stop, str) else (stop or [])
         ids = self.tok.encode(prompt)
         fut = None if is_stream else asyncio.Future()
-        return Seq(ids, max_tokens, cfg, stops, is_stream, fut)
+        return Seq(ids, min(max_tokens, MAX_TOKENS_CAP), cfg, stops, is_stream, fut)
 
     async def complete(self, prompt, max_tokens=50, temperature=0.0, top_k=0, top_p=1.0, stop=None):
         seq = self._new_seq(prompt, max_tokens, temperature, top_k, top_p, stop, False)
         self.pending.append(seq)
-        return await seq.fut
+        return await asyncio.wait_for(seq.fut, timeout=REQ_TIMEOUT)
 
     def submit_stream(self, prompt, max_tokens=50, temperature=0.0, top_k=0, top_p=1.0, stop=None):
         seq = self._new_seq(prompt, max_tokens, temperature, top_k, top_p, stop, True)
@@ -191,8 +215,16 @@ class AsyncServer:
         return seq
 
     async def stream_tokens(self, seq):
+        loop = asyncio.get_event_loop()
+        deadline = loop.time() + REQ_TIMEOUT
         while True:
-            item = await seq.queue.get()
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                break
+            try:
+                item = await asyncio.wait_for(seq.queue.get(), timeout=remaining)
+            except asyncio.TimeoutError:
+                break
             if item is None:
                 break
             yield item
@@ -210,7 +242,14 @@ _eng = None; _tok = None
 
 @app.on_event("startup")
 async def _startup():
-    _server[0] = AsyncServer(_eng, _tok, asyncio.get_running_loop())
+    srv = AsyncServer(_eng, _tok, asyncio.get_running_loop())
+    _server[0] = srv
+    # warmup: run a dummy request so the first real request isn't hit by NPU cold-start
+    try:
+        await asyncio.wait_for(srv.complete("warmup", max_tokens=2), timeout=60)
+        print("[server] warmup done", flush=True)
+    except Exception as e:
+        print("[server] warmup failed: %s" % e, flush=True)
 
 
 class Req(BaseModel):
@@ -247,8 +286,12 @@ async def completions(r: Req):
         try:
             txt = await srv.complete(r.prompt, r.max_tokens, r.temperature, r.top_k, r.top_p, r.stop)
             return {"text": txt}
+        except asyncio.TimeoutError:
+            from fastapi.responses import JSONResponse
+            return JSONResponse({"error": "request timeout"}, status_code=504)
         except Exception as e:
-            return {"error": str(e)}
+            from fastapi.responses import JSONResponse
+            return JSONResponse({"error": str(e)}, status_code=500)
 
 
 @app.get("/health")
