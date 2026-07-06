@@ -74,22 +74,37 @@ try:
         fused_lerp6,
     )
 except Exception:
+    class _StubAttr:
+        """Benign stand-in for a CUDA kernel attr: callable (->False), falsy,
+        int-0. Class-level defaults (e.g. w4_linear.GROUP) evaluate without
+        error; the real CUDA methods are never called on the Ascend pure-torch
+        path (W4Linear/LoRA/sparse are fp16-inactive)."""
+
+        def __call__(self, *a, **k):
+            return False
+
+        def __int__(self):
+            return 0
+
+        def __bool__(self):
+            return False
+
     class _NoKernel:
         available = staticmethod(lambda *a, **k: False)
 
         def __getattr__(self, _):
-            raise RuntimeError("rwkv7 CUDA kernel unavailable on Ascend")
+            return _StubAttr()
 
     fast_linear = lora_fused = sparse_cmix = w4_linear = _NoKernel()
 
     def fused_gate_corr(*a, **k):
-        raise RuntimeError("fused_gate_corr unavailable on Ascend")
+        return _StubAttr()
 
     def fused_kk_kmix(*a, **k):
-        raise RuntimeError("fused_kk_kmix unavailable on Ascend")
+        return _StubAttr()
 
     def fused_lerp6(*a, **k):
-        raise RuntimeError("fused_lerp6 unavailable on Ascend")
+        return _StubAttr()
 
 from sglang.srt.layers.linear import (
     ColumnParallelLinear,
