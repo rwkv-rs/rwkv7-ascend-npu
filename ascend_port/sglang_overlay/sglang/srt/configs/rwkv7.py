@@ -52,7 +52,9 @@ class Rwkv7Config(PretrainedConfig):
         self.hidden_size = hidden_size
         self.num_hidden_layers = num_hidden_layers
         self.head_dim = head_dim
-        # RWKV-7 0.1B: derive num_heads from r_k/head_dim (config may say 32; keep 12).
+        # num_heads is null in fla-hub configs -> derive from hidden_size // head_dim.
+        if num_heads is None:
+            num_heads = hidden_size // head_dim
         self.num_heads = num_heads
         self.decay_low_rank_dim = decay_low_rank_dim
         self.a_low_rank_dim = a_low_rank_dim

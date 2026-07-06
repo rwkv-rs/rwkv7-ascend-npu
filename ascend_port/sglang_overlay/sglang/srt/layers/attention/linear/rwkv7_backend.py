@@ -116,9 +116,19 @@ class Rwkv7AttnBackend(AscendMambaAttnBackendBase):
         Pure index logic -- device-agnostic, runs on NPU unchanged.
         """
         cache = self.req_to_token_pool.mamba2_layer_cache(layer_id)
-        conv = cache.conv[conv_idx]  # [size+1, hidden, 1]
+        conv = cache.conv[conv_idx]  # NPU pool: [size+1, 1, hidden]; CUDA: [size+1, hidden, 1]
         md = self.forward_metadata
         cache_indices = md.mamba_cache_indices
+        # Layout-agnostic per-slot hidden-vector access: flatten the two non-slot
+        # dims (one is the size-1 conv_kernel) to [hidden] for read; scatter-write
+        # back by reshaping to the actual non-slot shape.
+        slot_tail = tuple(conv.shape[1:])  # (1, hidden) on NPU, (hidden, 1) on CUDA
+
+        def conv_read(idx):
+            return conv[idx].reshape(idx.numel(), -1)  # [n, hidden]
+
+        def conv_write(idx, val):  # val: [n, hidden] -> scatter write-back
+            conv[idx] = val.reshape(val.shape[0], *slot_tail)
 
         if forward_batch.forward_mode.is_decode_or_idle():
             # one token per request: shifted = stored prev; store current.
@@ -126,8 +136,8 @@ class Rwkv7AttnBackend(AscendMambaAttnBackendBase):
             # PAD_SLOT_ID = -1; clamp to 0 (the pool's reserved never-allocated
             # slot) so -1 doesn't wrap to a live slot. Pad outputs are discarded.
             safe_idx = torch.clamp_min(cache_indices, 0)
-            prev = conv[safe_idx, :, 0].clone()  # [n, hidden]
-            conv[safe_idx, :, 0] = x.to(conv.dtype)
+            prev = conv_read(safe_idx).clone()  # [n, hidden]
+            conv_write(safe_idx, x.to(conv.dtype))
             return prev.to(x.dtype)
 
         # extend (packed B=1, varlen via query_start_loc)
@@ -147,10 +157,18 @@ class Rwkv7AttnBackend(AscendMambaAttnBackendBase):
             )
             conv.index_fill_(0, zero_target.to(torch.long), 0.0)
         # first token of each seq reads stored prev (0 for fresh; carry-in otherwise)
-        shifted[starts] = conv[safe_idx, :, 0].to(x.dtype)
+        shifted[starts] = conv_read(safe_idx).to(x.dtype)
         # store last token of each seq for the next chunk / decode.
-        conv[safe_idx, :, 0] = x[ends - 1].to(conv.dtype)
+        conv_write(safe_idx, x[ends - 1].to(conv.dtype))
         return shifted
+
+    # ---- fused shift+lerp glue (CUDA-only; stub to None so the model falls back
+    # to token_shift + plain-torch lerp, which is the M1c-verified path). ----
+    def try_fused_shift_lerp6(self, normed, layer_id, conv_idx, mix6, forward_batch):
+        return None
+
+    def try_fused_shift_lerp1(self, normed, layer_id, conv_idx, x_k, forward_batch):
+        return None
 
     # ---- WKV recurrence (decode + extend -> ascend_port.wkv.wkv_recurrent) ----
     def recurrence(

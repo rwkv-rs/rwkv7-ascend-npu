@@ -139,11 +139,11 @@ edit("model_executor/pool_configurator.py",
      "        self._cell_size = self._compute_cell_size(mr, num_layers)",
      '\n        self._all_linear_token_cap = (\n            min(mr.server_args.max_mamba_cache_size * mr.model_config.context_len, 1 << 20)\n            if self._cell_size == 0 else None\n        )',
      "pool_configurator cell_size")
-edit("model_executor/pool_configurator.py",
-     "if self._cell_size == 0:",
-     "        max_total_num_tokens = available_bytes // self._cell_size",
-     "\n        if self._cell_size == 0:\n            max_total_num_tokens = self._all_linear_token_cap\n        else:\n            max_total_num_tokens = available_bytes // self._cell_size",
-     "pool_configurator pool_sizes")
+replace("model_executor/pool_configurator.py",
+        "max_total_num_tokens = self._all_linear_token_cap",
+        "        max_total_num_tokens = available_bytes // self._cell_size",
+        "        if self._cell_size == 0:\n            max_total_num_tokens = self._all_linear_token_cap\n        else:\n            max_total_num_tokens = available_bytes // self._cell_size",
+        "pool_configurator pool_sizes")
 
 # 6. server_args.py: radix-cache disable for RWKV-7
 edit("server_args.py",
