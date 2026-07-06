@@ -78,16 +78,30 @@ except Exception:
         """Benign stand-in for a CUDA kernel attr: callable (->False), falsy,
         int-0. Class-level defaults (e.g. w4_linear.GROUP) evaluate without
         error; the real CUDA methods are never called on the Ascend pure-torch
-        path (W4Linear/LoRA/sparse are fp16-inactive)."""
+        path (W4Linear/LoRA/sparse are fp16-inactive). Subscriptable/iterable
+        (returns self / empty) so guard-style accesses don't raise."""
 
         def __call__(self, *a, **k):
-            return False
+            raise NotImplementedError(
+                "A rwkv7 CUDA kernel stub was CALLED on Ascend (bf16/fp16 path). "
+                "This means a fused/fast path is engaged that needs the real CUDA "
+                "kernel. Force the plain-torch path instead."
+            )
 
         def __int__(self):
             return 0
 
         def __bool__(self):
             return False
+
+        def __getitem__(self, _k):
+            return self
+
+        def __iter__(self):
+            return iter(())
+
+        def __len__(self):
+            return 0
 
     class _NoKernel:
         available = staticmethod(lambda *a, **k: False)
@@ -699,7 +713,9 @@ class Rwkv7Attention(nn.Module):
         # Fused triton elementwise path: bit-identical to the torch reference at
         # bf16/fp16 (verified), so it stacks with cuda-graph + int8. fp32 keeps the
         # original torch path (1-ULP reduction-order drift would risk the fp32 gate).
-        fused = x.dtype != torch.float32
+        # Ascend: the fused_lerp{6,1}/kk_kmix/gate_corr triton kernels are not
+        # available, so force the plain-torch path (M1c-verified) for ALL dtypes.
+        fused = False
 
         # R2: try the fused paged token-shift + 6-way lerp (one kernel, shifted
         # stays on-chip). Falls back to token_shift + fused_lerp6 when ineligible.
@@ -810,7 +826,17 @@ class Rwkv7Attention(nn.Module):
 
         o = be.recurrence(r, w_log, k, v, kk, a, self.layer_id, forward_batch)
         # o: [T, nh, hd]
-        o = self.g_norm(o.reshape(T, H))
+        # Ascend: aclnnGroupNorm fails on bf16 weights (error 161002). Compute the
+        # group norm manually in fp32 (per-head over head_dim + affine), matching
+        # nn.GroupNorm(num_groups=nh) exactly. fp32 path is unchanged (.float()
+        # no-op); this just bypasses the aclnn op.
+        o_f = o.reshape(T, nh, hd).float()
+        mean = o_f.mean(dim=-1, keepdim=True)
+        var = o_f.var(dim=-1, keepdim=True, unbiased=False)
+        o_f = (o_f - mean) / (var + self.g_norm.eps).sqrt()
+        w = self.g_norm.weight.data.reshape(nh, hd).float()
+        b = self.g_norm.bias.data.reshape(nh, hd).float()
+        o = (o_f * w + b).reshape(T, H).to(o.dtype)
         if fused:
             # o = (g_norm(o) + (r*k*r_k).sum(-1)*v) * g   (one launch)
             o = fused_gate_corr(o, r, k, self.r_k, v, g, nh)
