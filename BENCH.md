@@ -21,6 +21,15 @@ Output verified identical ("Once upon a time → …little girl named Lily…").
 Remaining gap to A100/3090-class (~230 tok/s): the projection GEMV (r/k/v/o +
 ffn still use torch's default F.linear for M=1) — the next optimization lever.
 
+### GEMV exploration (done) — F.linear is the best available; AscendC needed to beat it
+
+Tested 3 M=1 GEMV paths on the 910B3 (fp16, 2048²) vs torch `F.linear` (~0.027ms, ~26% HBM bandwidth):
+- **triton-ascend GEMV** (reduction kernel): 0.092ms — **3.4× slower** than F.linear.
+- **bgmv_expand reuse** (sgl_kernel_npu LoRA gemv, single-group): 0.119ms — **3.4× slower AND wrong** (LoRA residual semantics, not a clean drop-in).
+- **torch F.linear** (torch_npu matmul): the baseline — the fastest available.
+
+So the projection GEMV has **no quick win** via triton-ascend or op-reuse. Beating F.linear (toward ~80% bandwidth, ~0.007ms) needs a **custom AscendC (CANN C++) GEMV kernel** — a multi-hour C++ effort (template fully mapped: sgl-kernel-npu `bgmv_expand` op_kernel/op_host + ACLRT_LAUNCH_KERNEL + cmake + `torch.ops.npu.<op>` binding; `ascend_port/ascendc/gemv_m1_kernel.cpp` scaffold committed). Even a perfect GEMV only reaches ~90 tok/s (projections are ~3-4ms of the 15ms/token); the remaining gap to 150+ needs fusing glue/lora/gate_corr too (more AscendC kernels). The WKV fusion (triton-ascend, 2×) was the win achievable via the quick paths; the rest is the AscendC fast-path marathon.
+
 ## fla-hub/rwkv7-0.4b-world — bf16 (torch_npu 2.9.0, venv-29)
 
 bf16 serving WORKS end-to-end on the 910B3 (was blocked on torch_npu 2.8.0.post2
