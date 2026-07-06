@@ -1,0 +1,15 @@
+{
+  "date": "2026-07-05",
+  "npu_device": "Ascend 910B3 (torch_npu, CANN 8.5.0)",
+  "reference_device": "Tesla V100-PCIE-32GB (torch 2.5.1+cu124)",
+  "method": "Same real weights + same HF-native fla-free forward (NativeRWKV7ForCausalLM, fp16) on fixed prompt [0..15]; cos/argmax/max_abs of NPU logits vs V100 logits.",
+  "models": [
+    {"model": "rwkv7-g1d-0.1b-hf", "params": "0.1B", "cos_vs_v100": 0.99997, "argmax_match_rate": 1.0, "max_abs": 0.1875, "greedy_next8": [16, 17, 18, 21, 18, 21, 18, 21], "verdict": "PASS"},
+    {"model": "rwkv7-g1d-0.4b-hf", "params": "0.4B", "cos_vs_v100": 0.99997, "argmax_match_rate": 1.0, "max_abs": 0.1562, "greedy_next8": [16, 17, 18, 19, 20, 21, 22, 23], "verdict": "PASS"},
+    {"model": "rwkv7-g1g-1.5b-hf", "params": "1.5B", "cos_vs_v100": 1.0, "argmax_match_rate": 1.0, "max_abs": 0.1875, "greedy_next8": [16, 17, 18, 19, 20, 21, 22, 23], "verdict": "PASS"},
+    {"model": "rwkv7-g1g-2.9b-hf", "params": "2.9B", "cos_vs_v100": 0.99998, "argmax_match_rate": 1.0, "max_abs": 0.0938, "greedy_next8": [16, 17, 18, 19, 20, 21, 22, 23], "verdict": "PASS"},
+    {"model": "rwkv7-g1g-7.2b-hf", "params": "7.2B", "cos_vs_v100": 0.99998, "argmax_match_rate": 1.0, "max_abs": 0.0938, "greedy_next8": [16, 17, 18, 19, 20, 21, 22, 23], "verdict": "PASS"},
+    {"model": "rwkv7-g1g-13.3b-hf", "params": "13.3B", "cos_vs_v100": 0.99999, "argmax_match_rate": 1.0, "max_abs": 0.125, "greedy_next8": [16, 17, 18, 19, 20, 21, 22, 23], "verdict": "PASS"}
+  ],
+  "summary": "All 6 models (0.1B-13.3B) PASS: NPU matches V100 CUDA within fp16 precision (cos 0.99997-1.0, argmax 1.0)."
+}

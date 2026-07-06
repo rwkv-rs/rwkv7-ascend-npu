@@ -1,0 +1,15 @@
+[
+  {
+    "op": "RwkvShiftMix",
+    "language": "cpp",
+    "input_desc": [
+      {"name": "x", "param_type": "required", "format": ["ND"], "type": ["fp16"]},
+      {"name": "x_prev", "param_type": "required", "format": ["ND"], "type": ["fp16"]},
+      {"name": "x_r", "param_type": "required", "format": ["ND"], "type": ["fp16"]}
+    ],
+    "output_desc": [
+      {"name": "y", "param_type": "required", "format": ["ND"], "type": ["fp16"]}
+    ],
+    "attr_desc": []
+  }
+]
