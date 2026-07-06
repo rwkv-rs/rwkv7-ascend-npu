@@ -25,7 +25,12 @@ from typing import Optional
 
 import torch
 
-from ascend_port.wkv import wkv_recurrent
+# Prefer the fused triton-ascend WKV kernel (much faster on NPU; matches the
+# pure-torch path to ~1e-6). Fall back to pure-torch if triton-ascend is absent.
+try:
+    from ascend_port.wkv_triton import wkv_recurrent
+except Exception:
+    from ascend_port.wkv import wkv_recurrent
 from sglang.srt.layers.attention.base_attn_backend import AttentionBackend
 from sglang.srt.layers.attention.hybrid_linear_attn_backend import MambaAttnBackendBase
 from sglang.srt.hardware_backend.npu.attention.ascend_hybrid_linear_attn_backend import (

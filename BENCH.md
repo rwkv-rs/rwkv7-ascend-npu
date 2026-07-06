@@ -5,6 +5,22 @@ Stack: sglang 0.5.14 + torch 2.8.0 + torch_npu 2.8.0.post2 + sgl-kernel-npu
 2026.6.1 + triton-ascend; RWKV-7 recurrence via `ascend_port/wkv.py` (pure torch,
 M1a/M1c token-exact). Decode cuda graph ON (captured for bs 1..64 in ~26 s).
 
+## fla-hub/rwkv7-1.5b-world — fp16, Triton-ascend WKV (operator-perf P3)
+
+Operator optimization (loop bbbe7e93): swapped the pure-torch WKV recurrence for
+the fused **Triton kernel via triton-ascend** (`ascend_port/wkv_triton.py`,
+Hakureirm's kernel; compiles on the 910B3 with core tl ops, matches pure-torch
+to ~1e-6). Decode (bs=1, cuda graph):
+
+| WKV path | 1.5B fp16 bs=1 decode |
+|---|---:|
+| pure-torch (ascend_port/wkv.py) | ~33 tok/s |
+| **Triton-ascend fused kernel** | **~66.6 tok/s (2×)** |
+
+Output verified identical ("Once upon a time → …little girl named Lily…").
+Remaining gap to A100/3090-class (~230 tok/s): the projection GEMV (r/k/v/o +
+ffn still use torch's default F.linear for M=1) — the next optimization lever.
+
 ## fla-hub/rwkv7-0.4b-world — bf16 (torch_npu 2.9.0, venv-29)
 
 bf16 serving WORKS end-to-end on the 910B3 (was blocked on torch_npu 2.8.0.post2
