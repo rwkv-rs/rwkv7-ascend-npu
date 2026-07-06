@@ -12,6 +12,7 @@ import sys; sys.path.insert(0, os.environ.get("RWKV7_HF_PATH", "/root/rwkv7-asce
 import json, asyncio
 import torch, torch_npu
 from serve_engine import RWKV7Engine, DEV, VOCAB
+from graph_decode import NpuGraphDecoder
 from rwkv7_hf.tokenization_rwkv7 import _RWKVTrie
 
 REQ_TIMEOUT = float(os.environ.get("RWKV7_REQ_TIMEOUT", "120"))       # per-request max seconds
@@ -49,8 +50,8 @@ class Seq:
 
 
 class SlottedScheduler:
-    def __init__(self, eng, tok):
-        self.eng = eng; self.tok = tok
+    def __init__(self, eng, tok, graph_decoder=None):
+        self.eng = eng; self.tok = tok; self.graph_decoder = graph_decoder
         L, H, N = eng.L, eng.H, eng.N; hd = eng.hidden
         self.sa = torch.zeros(L, 0, H, N, N, dtype=torch.float32, device=DEV)
         self.xp = torch.zeros(L, 0, hd, dtype=torch.float16, device=DEV)
@@ -93,9 +94,15 @@ class SlottedScheduler:
     def step(self, loop=None):
         if self.B == 0:
             return []
-        emb = self.eng.base.embeddings(torch.tensor([s.next for s in self.seqs], device=DEV))
-        logits = self.eng.mod.rwkv7_decode_full(emb, *self.eng.W, self.sa, self.xp, self.xf, self.vf,
-                                                 self.eng.H, self.eng.N, self.eng.lm_w_m, self.eng.fnorm_w, self.eng.fnorm_b)
+        if self.B == 1 and self.graph_decoder is not None:
+            # B=1 fast path: NPUGraph replay (collapses ~960 launches -> 1 device replay)
+            seq0 = self.seqs[0]
+            logits = self.graph_decoder.decode(seq0.next, self.sa[:, 0:1], self.xp[:, 0:1],
+                                                self.xf[:, 0:1], self.vf[0:1])
+        else:
+            emb = self.eng.base.embeddings(torch.tensor([s.next for s in self.seqs], device=DEV))
+            logits = self.eng.mod.rwkv7_decode_full(emb, *self.eng.W, self.sa, self.xp, self.xf, self.vf,
+                                                     self.eng.H, self.eng.N, self.eng.lm_w_m, self.eng.fnorm_w, self.eng.fnorm_b)
         nxt = sample_rows(logits, [s.cfg for s in self.seqs])
         done = []
         for i in range(self.B):
@@ -140,9 +147,9 @@ class SlottedScheduler:
 
 # ---------------- async server (single-threaded loop) ----------------
 class AsyncServer:
-    def __init__(self, eng, tok, loop):
+    def __init__(self, eng, tok, loop, graph_decoder=None):
         self.eng = eng; self.tok = tok; self.loop = loop
-        self.sch = SlottedScheduler(eng, tok); self.pending = []
+        self.sch = SlottedScheduler(eng, tok, graph_decoder); self.pending = []
         loop.create_task(self._run())
 
     async def _run(self):
@@ -210,12 +217,12 @@ from typing import Optional, Union, List
 from pydantic import BaseModel
 app = FastAPI(title="RWKV7-Ascend-Full")
 _server = [None]
-_eng = None; _tok = None
+_eng = None; _tok = None; _graph_decoder = None
 
 
 @app.on_event("startup")
 async def _startup():
-    srv = AsyncServer(_eng, _tok, asyncio.get_running_loop())
+    srv = AsyncServer(_eng, _tok, asyncio.get_running_loop(), _graph_decoder)
     _server[0] = srv
     # warmup: run a dummy request so the first real request isn't hit by NPU cold-start
     try:
@@ -279,9 +286,17 @@ if __name__ == "__main__":
     ap.add_argument("--H", type=int, default=12); ap.add_argument("--N", type=int, default=64); ap.add_argument("--L", type=int, default=12)
     ap.add_argument("--vocab", default="/root/rwkv7-ascend/assets/rwkv_vocab_v20230424.txt")
     ap.add_argument("--port", type=int, default=8000)
+    ap.add_argument("--graph-decode", action="store_true",
+                    default=os.environ.get("RWKV7_GRAPH_DECODE", "0") == "1",
+                    help="capture a B=1 NPUGraph decode fast path (~5.9x lower single-seq latency)")
     args = ap.parse_args()
     eng = RWKV7Engine(args.model, args.H, args.N, args.L)
     tok = _RWKVTrie(args.vocab)
     _eng = eng; _tok = tok
+    if args.graph_decode:
+        print("[server] capturing B=1 NPUGraph decode fast path...", flush=True)
+        _graph_decoder = NpuGraphDecoder(eng)
+        _graph_decoder.capture()
+        print("[server] NPUGraph captured (B=1 decode accelerated)", flush=True)
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=args.port)

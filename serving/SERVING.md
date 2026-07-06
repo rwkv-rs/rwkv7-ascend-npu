@@ -92,6 +92,7 @@ is **multi-worker** (one per NPU), not multithreading.
 | `serve_engine.py` | `RWKV7Engine`: loads model + weights, compiles the C++ forward, batched decode. |
 | `sampler.py` | `SamplerCfg` + `sample_rows` (greedy batched fast-path / temperature / top_k / top_p). Separated so it's CI-testable without NPU/rwkv7_hf. |
 | `serve_full.py` | A worker: `SlottedScheduler` (persistent state, no per-step cat) + `AsyncServer` (single-threaded loop) + FastAPI `/v1/completions` (JSON + SSE) + stop strings + error isolation + timeouts + warmup. |
+| `graph_decode.py` | `NpuGraphDecoder`: captures a B=1 decode step as an `NPUGraph` (dedicated fixed-address buffers, decoupled from the scheduler's batch state). `SlottedScheduler.step` replays it when B=1 (`--graph-decode`); B>1 falls back to eager. |
 | `serve_router.py` | Front-end router: fans `/v1/completions` to N workers (least-in-flight), forwards JSON + SSE, `/health`, `/metrics`. |
 | `run_cluster.sh` | Launcher: N workers (one per NPU via `ASCEND_RT_VISIBLE_DEVICES`) + the router. |
 | `serve_scheduler.py` | Earlier cat-per-step scheduler (superseded by `SlottedScheduler`; kept as reference). |
@@ -121,6 +122,7 @@ After the fix, greedy `[0..15]→[16,17,18,21,18,21,18,21]` is bit-exact vs HF-n
 - **Correctness**: greedy bit-exact vs HF-native; scheduler (mid-flight join,
   staggered completion, concurrent batch) bit-exact vs standalone — `ALL_MATCH`.
 - **Throughput**: 64 concurrent × 32 new tokens = **3666 aggregate tok/s** (our C++ forward); all 6 model sizes (0.1B–13.3B) lead in batched aggregate. For the clean hardware read — **same-code (pure PyTorch) NPU ≈ RTX 5070** — see [`../BENCHMARK.md`](../BENCHMARK.md).
+- **B=1 latency (NPUGraph)**: `--graph-decode` → 0.1B 60→**353 tok/s (5.9×, A100 parity)**, 1.5B 30→**113 tok/s (3.7×)**; bit-exact vs eager (`tests/test_npugraph_correctness.py`, 2/2 pass). See [`../BENCHMARK.md`](../BENCHMARK.md).
 - **Live API**: 3 concurrent `/v1/completions` on 1.5B → coherent text (greedy
   story + sampled poem).
 - **Quantization PoC**: W8A16 via `npu_weight_quant_batchmatmul` is correct
@@ -143,12 +145,14 @@ After the fix, greedy `[0..15]→[16,17,18,21,18,21,18,21]` is bit-exact vs HF-n
 | Observability | 🟡 `/health` + `/metrics` (no logging/tracing) |
 | Packaging | 🟡 Dockerfile written (untested — no Docker on 910B3) |
 | Scalability | 🔴 multi-worker architecture ready, but multi-NPU unverified (910B3 has 1 NPU) |
-| B=1 latency | 🔴 launch-overhead-bound (needs AscendC GEMV-Cube, multi-month) |
+| B=1 latency | 🟢 `--graph-decode` captures a B=1 NPUGraph (5.9× at 0.1B → 353 tok/s, A100 parity; 3.7× at 1.5B → 113 tok/s) |
 | Quantization | 🔴 investigated, doesn't help on this stack |
 
 **Hard-blocked (need other infra/scope, not "incomplete"):** multi-NPU verification
-(needs a multi-NPU box), Docker build/test (needs a Docker+NPU host), AscendC
-GEMV-Cube (multi-month research).
+(needs a multi-NPU box), Docker build/test (needs a Docker+NPU host).
+(The B=1 latency row was previously blocked on "AscendC GEMV-Cube, multi-month" —
+that direction was **disproven**: a Cube matmul kernel is 33× slower than `at::linear`
+for a B=1 GEMV. NPUGraph solved B=1 instead. See [`../BENCHMARK.md`](../BENCHMARK.md).)
 
 ---
 
@@ -163,6 +167,12 @@ RWKV7_REQ_TIMEOUT=120 python serve_full.py \
 curl localhost:8001/v1/completions -H 'Content-Type: application/json' \
   -d '{"prompt":"Once upon a time","max_tokens":50,"temperature":0.7,"top_k":40}'
 ```
+
+> **Add `--graph-decode`** (or `RWKV7_GRAPH_DECODE=1`) for production single-stream
+> latency: captures a B=1 `NPUGraph` at startup → 5.9× lower per-token decode latency
+> for single-request serving (B>1 still uses the eager batched forward). See
+> [`../BENCHMARK.md`](../BENCHMARK.md).
+
 
 **Cluster (router + N workers, one per NPU):**
 ```bash
