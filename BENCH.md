@@ -5,6 +5,15 @@ Stack: sglang 0.5.14 + torch 2.8.0 + torch_npu 2.8.0.post2 + sgl-kernel-npu
 2026.6.1 + triton-ascend; RWKV-7 recurrence via `ascend_port/wkv.py` (pure torch,
 M1a/M1c token-exact). Decode cuda graph ON (captured for bs 1..64 in ~26 s).
 
+## fla-hub/rwkv7-0.4b-world — bf16 (torch_npu 2.9.0, venv-29)
+
+bf16 serving WORKS end-to-end on the 910B3 (was blocked on torch_npu 2.8.0.post2
+aclnn norm failure; torch_npu 2.9.0 -- still CANN-8.5.0-compatible -- fixes
+aclnnLayerNorm/GroupNorm, and the `wkv_recurrent` output is cast back to the
+input dtype so fp32 doesn't leak into bf16 LayerNorm). Model mem 0.91 GB (half
+of fp32's 1.87 GB), decode cuda graph captured, greedy output identical to fp32
+("Eiffel Tower... -> Paris, France..."). Launch via venv-29 + `--dtype bfloat16`.
+
 ## fla-hub/rwkv7-0.4b-world (fp32, 24 layers, hidden 1024)
 
 | Phase | Throughput | Notes |

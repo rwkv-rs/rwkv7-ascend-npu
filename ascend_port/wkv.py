@@ -95,7 +95,11 @@ def wkv_recurrent(
     a_kernel = -kk
     b_kernel = kk * a_lr
 
-    # fp32 throughout (greedy-exact vs the fp32 numpy oracle).
+    # fp32 throughout (greedy-exact vs the fp32 numpy oracle). Cast the OUTPUT
+    # back to the input dtype so bf16 serving doesn't leak fp32 into downstream
+    # ops (aclnn LayerNorm rejects fp32 input + bf16 weight, EZ1001). The state
+    # (ht) stays fp32.
+    out_dtype = r.dtype
     r = r.float(); w = w.float(); k = k.float(); v = v.float()
     a_kernel = a_kernel.float(); b_kernel = b_kernel.float()
     dev = r.device
@@ -116,7 +120,7 @@ def wkv_recurrent(
             s_list.append(sb)
         o = torch.stack(o_list, dim=0)                          # [B, T, H, V]
         ht = torch.stack(s_list, dim=0)                         # [B, H, K, V]
-        return (o, ht) if output_final_state else (o, None)
+        return (o.to(out_dtype), ht) if output_final_state else (o.to(out_dtype), None)
 
     # Packed varlen (B == 1).
     if B != 1:
@@ -137,4 +141,4 @@ def wkv_recurrent(
         )
         o[0, bos:eos] = ob
         ht[n] = sb
-    return (o, ht) if output_final_state else (o, None)
+    return (o.to(out_dtype), ht) if output_final_state else (o.to(out_dtype), None)
