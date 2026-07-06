@@ -1,65 +1,72 @@
 # vllm-rwkv-ascend
 
-NPU (Huawei Ascend 910B) adaptation of [`rwkv-rs/vllm-rwkv`](https://github.com/rwkv-rs/vllm-rwkv)
-— the Albatross faster3a RWKV-7 engine ported into vLLM.
+RWKV-7 inference + serving on **Huawei Ascend 910B NPU**. Two things live here:
 
-> **Update (post-v0.1.0): vLLM serving on Ascend is blocked** by upstream version lag
-> (vllm-rwkv base = vllm **v0.23** vs vllm-ascend newest **0.22.1** which itself needs
-> CANN 9.0.0; we're on CANN 8.5.0). Rather than wait, we built a **self-contained
-> RWKV7 continuous-batch serving engine** — live OpenAI-compatible `/v1/completions`,
-> dynamic batching, top-k/top-p/temperature. **Same-code (pure PyTorch) the 910B3 NPU ≈ an RTX 5070** (NPU ~1.15×); the optimized-path gap vs CUDA is software, not hardware.
-> See **[`BENCHMARK.md`](BENCHMARK.md)** + [`serving/SERVING.md`](serving/SERVING.md).
+1. **A self-contained RWKV7 continuous-batch serving framework** (`serving/`) — the
+   active, usable deliverable. Live OpenAI `/v1/completions`, streaming + stop
+   strings, sampler, multi-worker router, error isolation, Prometheus metrics, a
+   Docker image, and a 21-test pytest suite. Built because full vLLM serving is
+   blocked on Ascend (see [why](#why-a-separate-serving-framework-the-vllm-blocker)).
+2. **A dormant op-shim** (root `.py` + `harness/`) — the Phase-1 `vllm-rwkv` port
+   (pure-PyTorch `rwkv7_*` ops). Kept for the day `vllm-ascend` catches up to
+   `vllm-rwkv`'s base.
+
+> **Same-code (pure PyTorch) the 910B3 NPU ≈ an RTX 5070** (NPU ~1.15×); the
+> optimized-path gap vs CUDA is **software, not hardware**. See
+> [`BENCHMARK.md`](BENCHMARK.md).
 
 ## Docs
 
-- **[`BENCHMARK.md`](BENCHMARK.md)** — performance: NPU vs CUDA (same-code NPU ≈ RTX 5070; optimized-path gap is software)
-- **[`serving/SERVING.md`](serving/SERVING.md)** — the serving framework (what it is, how to run, current state)
-- **[`ARCHITECTURE.md`](ARCHITECTURE.md)** — internals deep-dive (request lifecycle, scheduler, the C++ forward)
-- **[`CONTRIBUTING.md`](CONTRIBUTING.md)** — dev setup, running tests, conventions
-- **[`serving/QUANT.md`](serving/QUANT.md)** — quantization investigation (W8A16 measured not faster)
-- **[`RELEASE_NOTES_v0.2.0.md`](RELEASE_NOTES_v0.2.0.md)** — serving framework release (latest); [`v0.1.0`](RELEASE_NOTES_v0.1.0.md) (op-shim)
-- **[`LICENSE`](LICENSE)** — Apache 2.0
+- **[BENCHMARK.md](BENCHMARK.md)** — performance: NPU vs CUDA (same-code NPU ≈ RTX 5070; optimized-path gap is software)
+- **[serving/SERVING.md](serving/SERVING.md)** — the serving framework (what it is, how to run, current state, ~70% production-ready)
+- **[ARCHITECTURE.md](ARCHITECTURE.md)** — internals deep-dive (request lifecycle, SlottedScheduler, the C++ forward, scaling)
+- **[CONTRIBUTING.md](CONTRIBUTING.md)** — dev setup, running tests, conventions
+- **[serving/QUANT.md](serving/QUANT.md)** — quantization investigation (W8A16 measured *not faster* on this stack)
+- **[perf/README.md](perf/README.md)** — the C++ op-coalesced forward (the state-writeback correctness fix)
+- **[RELEASE_NOTES_v0.2.0.md](RELEASE_NOTES_v0.2.0.md)** — serving framework release; [v0.1.0](RELEASE_NOTES_v0.1.0.md) (op-shim)
+- **[LICENSE](LICENSE)** — Apache 2.0
 
-## Design: additive layer, zero upstream edits
-
-We track `rwkv-rs/vllm-rwkv` as the `upstream` remote and **edit none of its
-files**. All NPU work is runtime-overlaid:
+## Repo layout
 
 ```
-vllm-rwkv-ascend/
-├── harness/rwkv7_fast_v3a.py   # vendored standalone (Albatross faster3a) for Phase-1 testing
-├── rwkv7_npu_ops.py            # ~40 rwkv7_* ops re-implemented in pure PyTorch (the shim)
-├── device_patch.py             # runtime monkeypatch: first_device/zero_state/sync -> npu
-├── bootstrap.py                # import this -> install shim + patch device + no-op load_extensions
-└── run_phase1.py               # correctness: upstream+shim on NPU vs HF-native, cosine
+serving/        the serving framework (ACTIVE): RWKV7Engine, SlottedScheduler,
+                AsyncServer, serve_router, sampler, Dockerfile, run_cluster.sh
+perf/           the C++ op-coalesced forward (rwkv7_ascend_v3.cpp) — shared by serving
+tests/          pytest suite (11 sampler unit + 10 NPU integration — 21/21 pass)
+harness/        vendored Albatross standalone (used by the op-shim + the benches)
+.github/        CI workflow (sampler unit tests; NPU tests auto-skip)
+rwkv7_npu_ops.py, device_patch.py, bootstrap.py, run_phase1.py
+                the DORMANT vllm-rwkv op-shim path (Phase 1)
+op_shim_cuda_bench.py, npu_op_shim_bench.py
+                same-code NPU-vs-CUDA benches (see BENCHMARK.md)
+contrib/        PROPOSAL_to_vllm_rwkv.md (decided against — see its STATUS header)
 ```
 
-`git fetch upstream && git merge upstream/main` stays fast-forward / conflict-free
-because our changes live in separate files. If upstream renames `first_device` /
-`zero_state` / an op namespace, only `device_patch.py` / `rwkv7_npu_ops.py` need a
-one-line update.
+## Why a separate serving framework (the vLLM blocker)
 
-## Phases
+Full vLLM serving of RWKV7 on Ascend is currently **not possible** — upstream
+version lag:
 
-| Phase | Goal | Status |
-|---|---|---|
-| 1 | RWKV-7 model produces correct logits on NPU (shim vs HF-native, cos) | ✅ done |
-| 2 | Perf: C++ op-coalesced hot path (`rwkv7_ascend_v3.cpp`, 323 tok/s) + continuous batching | ✅ done (state-writeback bug fixed) |
-| 3 | Full vLLM serving (OpenAI API) on NPU via `vllm-project/vllm-ascend` | ❌ **blocked** — vllm-ascend version lag; own-framework server in [`serving/`](serving/) instead (live, >2× Albatross) |
-
-## Phase 1 run (on 910B3)
-
-```bash
-PYTHONPATH=/root/rwkv7-ascend:. python run_phase1.py <0.1b.pth> <0.1b-hf-dir>
-# expect: PHASE1_RESULT cos_shim_vs_hfnative>0.99 verdict=PASS
+```
+vllm-rwkv (rwkv-rs)   base = vllm v0.23.1rc0   (tracks vllm main)
+vllm-ascend (Huawei)  newest = 0.22.1rc1       (needs CANN 9.0.0 + torch_npu 2.10)
+our 910B3             CANN 8.5.0 + torch_npu 2.9.0
 ```
 
-## Op-shim math provenance
+No `vllm-ascend` release matches `vllm-rwkv`'s v0.23 base. Rather than wait,
+`serving/` is a self-contained engine that serves RWKV7 on NPU **now**. The
+op-shim (root) stays for when `vllm-ascend` catches up.
 
-- layout + call sites: `harness/rwkv7_fast_v3a.py` (Albatross faster3a)
-- WKV recurrence + dithering: `faster3a_2605/cuda/rwkv7_wkv_fp16_v2.cu`
-- per-token TMix/CMix equations: `rwkv7_hf/native.py` (verified cos=1.0 vs official `rwkv`)
+## The dormant op-shim (Phase 1)
 
-The fp16 decay `exp2(A/(1+exp2(B*w)))` and `exp(-0.606531*sigmoid(w))` are the same
-function (verified equal at w=0 -> 0.7385, w=1 -> 0.6418); the shim uses the exact
-Albatross form + rotator dithering to track the CUDA ground truth.
+The root `.py` files re-implement `vllm-rwkv`'s ~40 CUDA `rwkv7_*` ops in **pure
+PyTorch** (`rwkv7_npu_ops.py`), plus runtime device patches (`device_patch.py`) and
+a bootstrap loader (`bootstrap.py`) — an additive layer over `vllm-rwkv` with zero
+edits to its files. Phase 1 verified: op-shim vs HF-native **cos=0.99998**,
+argmax 100% match. This path is dormant (full vLLM serving needs `vllm-ascend`,
+blocked above). The fp16 decay `exp2(A/(1+exp2(B*w)))` + rotator dithering track
+the Albatross faster3a CUDA ground truth.
+
+## License
+
+Apache 2.0 ([LICENSE](LICENSE)). Derives from [`rwkv-rs/vllm-rwkv`](https://github.com/rwkv-rs/vllm-rwkv) (Apache-2.0).
