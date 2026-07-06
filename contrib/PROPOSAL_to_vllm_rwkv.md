@@ -1,14 +1,12 @@
 # Proposal: contribute the pure-PyTorch op fallback upstream to `rwkv-rs/vllm-rwkv`
 
-> **STATUS: Decided AGAINST (2026-07).** After examining `rwkv-rs/vllm-rwkv` (a new
-> repo — 2 weeks old, 2 stars, issues disabled, CUDA-perf-focused, maintained by
-> vLLM contributors), this won't merge: vLLM handles non-CUDA hardware via
-> **hardware plugins** (vllm-ascend / vllm-rocm / ...), NOT model-level Python op
-> fallbacks — so the op-shim is architecturally misaligned with vLLM. Plus
-> vllm-rwkv is faster3a-CUDA-focused (a slow Python fallback is off-scope). The
-> op-shim's value stays in THIS repo as a public reference. The merge-likely
-> contribution (6-model weight verification) went to `rwkv7-hf-adapter-ascend`
-> (PR #3) instead. Kept for the analysis below.
+> **STATUS: Submitted as [rwkv-rs/vllm-rwkv#4](https://github.com/rwkv-rs/vllm-rwkv/pull/4) (2026-07).**
+> (An earlier "decided AGAINST" was based on an overstated "architectural mismatch" —
+> the op-shim is an *op-level* fallback, orthogonal to vLLM's *device-level* hardware
+> plugins, so it doesn't conflict with them; it enables CPU RWKV7. Re-assessed and
+> submitted. Outcome pending maintainer review — merge likelihood uncertain, ~30-40%:
+> the repo is new/CUDA-perf-focused/issues-disabled, but the fallback fills a real
+> gap and is correct + tested.)
 
 This is a ready-to-use draft for a PR (or initial issue) to
 [`rwkv-rs/vllm-rwkv`](https://github.com/rwkv-rs/vllm-rwkv). The artifact is our
