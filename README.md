@@ -7,11 +7,12 @@ NPU (Huawei Ascend 910B) adaptation of [`rwkv-rs/vllm-rwkv`](https://github.com/
 > (vllm-rwkv base = vllm **v0.23** vs vllm-ascend newest **0.22.1** which itself needs
 > CANN 9.0.0; we're on CANN 8.5.0). Rather than wait, we built a **self-contained
 > RWKV7 continuous-batch serving engine** — live OpenAI-compatible `/v1/completions`,
-> dynamic batching, top-k/top-p/temperature, at **>2× Albatross** aggregate throughput.
-> See **[`serving/SERVING.md`](serving/SERVING.md)**.
+> dynamic batching, top-k/top-p/temperature. **Same-code (pure PyTorch) the 910B3 NPU ≈ an RTX 5070** (NPU ~1.15×); the optimized-path gap vs CUDA is software, not hardware.
+> See **[`BENCHMARK.md`](BENCHMARK.md)** + [`serving/SERVING.md`](serving/SERVING.md).
 
 ## Docs
 
+- **[`BENCHMARK.md`](BENCHMARK.md)** — performance: NPU vs CUDA (same-code NPU ≈ RTX 5070; optimized-path gap is software)
 - **[`serving/SERVING.md`](serving/SERVING.md)** — the serving framework (what it is, how to run, current state)
 - **[`ARCHITECTURE.md`](ARCHITECTURE.md)** — internals deep-dive (request lifecycle, scheduler, the C++ forward)
 - **[`CONTRIBUTING.md`](CONTRIBUTING.md)** — dev setup, running tests, conventions

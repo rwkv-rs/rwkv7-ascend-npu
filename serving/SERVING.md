@@ -3,8 +3,9 @@
 > A self-contained RWKV7 continuous-batch serving engine for Ascend NPU. Live
 > OpenAI-compatible `/v1/completions` API, dynamic batching, streaming + stop
 > strings, sampler (temperature/top-k/top-p), multi-worker router, Prometheus
-> metrics, a Docker image, and a 21-test pytest suite — at **>2× Albatross**
-> aggregate throughput on a 910B3. Our own code, no vLLM dependency.
+> metrics, a Docker image, and a 21-test pytest suite. Same-code (pure PyTorch) the
+> 910B3 NPU ≈ an RTX 5070 (NPU ~1.15×); the optimized-path gap vs CUDA is software,
+> not hardware (see [`../BENCHMARK.md`](../BENCHMARK.md)). Our own code, no vLLM dependency.
 
 ---
 
@@ -119,8 +120,7 @@ After the fix, greedy `[0..15]→[16,17,18,21,18,21,18,21]` is bit-exact vs HF-n
 
 - **Correctness**: greedy bit-exact vs HF-native; scheduler (mid-flight join,
   staggered completion, concurrent batch) bit-exact vs standalone — `ALL_MATCH`.
-- **Throughput**: 64 concurrent × 32 new tokens = **3666 aggregate tok/s**
-  (>2× Albatross ≈ 3000); all 6 model sizes (0.1B–13.3B) lead in batched aggregate.
+- **Throughput**: 64 concurrent × 32 new tokens = **3666 aggregate tok/s** (our C++ forward); all 6 model sizes (0.1B–13.3B) lead in batched aggregate. For the clean hardware read — **same-code (pure PyTorch) NPU ≈ RTX 5070** — see [`../BENCHMARK.md`](../BENCHMARK.md).
 - **Live API**: 3 concurrent `/v1/completions` on 1.5B → coherent text (greedy
   story + sampled poem).
 - **Quantization PoC**: W8A16 via `npu_weight_quant_batchmatmul` is correct
@@ -137,7 +137,7 @@ After the fix, greedy `[0..15]→[16,17,18,21,18,21,18,21]` is bit-exact vs HF-n
 | Core engine correctness | 🟢 strong (bit-exact, 6 sizes) |
 | Continuous batching | 🟢 strong (dynamic, bit-exact) |
 | Serving API | 🟢 `/v1/completions` + streaming + stop + sampler (no chat/tools/structured) |
-| Aggregate throughput | 🟢 >2× Albatross, all sizes |
+| Aggregate throughput | 🟢 3666 tok/s @ B=64 (all sizes lead batched); same-code NPU ≈ CUDA — gap vs optimized CUDA is software |
 | Reliability | 🟡 error isolation + timeouts + warmup (no rate-limit/auth/graceful) |
 | Tests + CI | 🟡 21 pytests + GitHub Actions (no load tests; CI has no NPU) |
 | Observability | 🟡 `/health` + `/metrics` (no logging/tracing) |
