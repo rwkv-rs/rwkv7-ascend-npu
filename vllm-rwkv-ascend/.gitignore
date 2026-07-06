@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+*.egg-info/
+
+# torch C++ extension builds / cache
+build/
+dist/
+*.so
+*.egg-link
