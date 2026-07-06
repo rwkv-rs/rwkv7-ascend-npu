@@ -18,17 +18,48 @@ to ~1e-6). Decode (bs=1, cuda graph):
 | **Triton-ascend fused kernel** | **~66.6 tok/s (2×)** |
 
 Output verified identical ("Once upon a time → …little girl named Lily…").
-Remaining gap to A100/3090-class (~230 tok/s): the projection GEMV (r/k/v/o +
-ffn still use torch's default F.linear for M=1) — the next optimization lever.
+Remaining gap to A100/3090-class is **op-count, not the projection GEMV** — see the
+correction + cross-repo comparison below (the GEMV is NOT the lever; an AscendC
+Cube GEMV kernel measures 33× *slower* than `F.linear` for B=1).
 
-### GEMV exploration (done) — F.linear is the best available; AscendC needed to beat it
+### GEMV exploration (done) — F.linear is the best available; AscendC GEMV is NOT the lever
 
 Tested 3 M=1 GEMV paths on the 910B3 (fp16, 2048²) vs torch `F.linear` (~0.027ms, ~26% HBM bandwidth):
 - **triton-ascend GEMV** (reduction kernel): 0.092ms — **3.4× slower** than F.linear.
 - **bgmv_expand reuse** (sgl_kernel_npu LoRA gemv, single-group): 0.119ms — **3.4× slower AND wrong** (LoRA residual semantics, not a clean drop-in).
 - **torch F.linear** (torch_npu matmul): the baseline — the fastest available.
 
-So the projection GEMV has **no quick win** via triton-ascend or op-reuse. Beating F.linear (toward ~80% bandwidth, ~0.007ms) needs a **custom AscendC (CANN C++) GEMV kernel** — a multi-hour C++ effort (template fully mapped: sgl-kernel-npu `bgmv_expand` op_kernel/op_host + ACLRT_LAUNCH_KERNEL + cmake + `torch.ops.npu.<op>` binding; `ascend_port/ascendc/gemv_m1_kernel.cpp` scaffold committed). Even a perfect GEMV only reaches ~90 tok/s (projections are ~3-4ms of the 15ms/token); the remaining gap to 150+ needs fusing glue/lora/gate_corr too (more AscendC kernels). The WKV fusion (triton-ascend, 2×) was the win achievable via the quick paths; the rest is the AscendC fast-path marathon.
+So the projection GEMV has **no quick win** via triton-ascend or op-reuse. The earlier
+conclusion here — "beating F.linear needs a custom AscendC GEMV kernel" — is **wrong**:
+the sibling repo `vllm-rwkv-ascend` built + ran the canonical AscendC **Cube** matmul
+sample (`MatmulLeakyreluCustom`) on this same 910B3, and it measures **0.79ms vs
+`F.linear`'s 0.024ms for a B=1 GEMV — 33× *slower***. The Cube unit is a dense-GEMM
+(compute) engine; a B=1 projection is a memory-BW-bound GEMV that `F.linear` already
+optimally handles. **Do not pursue an AscendC GEMV/Cube kernel for the B=1 path.** The
+WKV fusion (triton-ascend, 2×) was the win achievable via the quick paths.
+
+### Cross-repo comparison — op-coalescing is the real lever (not the GEMV)
+
+This repo already runs decode under SGLang's built-in cuda graph (bs 1..64), so the
+~960 host dispatches are already collapsed — and 1.5B B=1 still lands at **~66.6 tok/s**.
+`sibling vllm-rwkv-ascend` (C++ op-coalesced forward — ~960 ops packed into one C++
+call — + its own `NPUGraph`) reaches **114 tok/s** for the same 1.5B B=1. Both use a
+graph; the gap is **op-count per step** (this repo's per-op Python `ascend_port/model.py`,
+~15-20 ops/layer, vs a single coalesced C++ call). A100 reference: 1.5B B=1
+`native_graph` = 164.5 tok/s.
+
+| path (1.5B fp16, B=1, graph decode) | tok/s | bottleneck |
+|---|---:|---|
+| this repo (per-op Python + sglang cuda graph) | ~66.6 | op-count (Python dispatch per op, even under graph) |
+| vllm-rwkv-ascend (C++ op-coalesced + NPUGraph) | 114 | op-count (fewer, but still kernel exec floor) |
+| A100 `native_graph` | 164.5 | kernel exec (CUDA graph + fused ops) |
+
+**Roadmap (the next lever):** port the op-coalesced-forward approach into this repo's
+attention backend — pack the per-layer projection/recurrence ops into fewer launches
+(C++ extension or a Triton fused layer kernel). That, on top of the existing cuda graph,
+is what closes the gap to vllm-rwkv-ascend / A100. The AscendC GEMV scaffold
+(`ascend_port/ascendc/gemv_m1_kernel.cpp`) is kept for elementwise/recurrence fusion,
+not GEMV.
 
 ## fla-hub/rwkv7-0.4b-world — bf16 (torch_npu 2.9.0, venv-29)
 
