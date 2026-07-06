@@ -4,6 +4,8 @@ set -ex
 [ -f /usr/local/Ascend/ascend-toolkit/set_env.sh ] && source /usr/local/Ascend/ascend-toolkit/set_env.sh
 VENV=/data/rwkv7-sglang-venv-29
 source $VENV/bin/activate
+# build deps the cmake/AscendC toolchain needs (pybind11 was missing -> cmake TORCH_DIR fail)
+pip install --no-cache-dir -i https://pypi.tuna.tsinghua.edu.cn/simple pybind11 "setuptools<80" decorator attrs cloudpickle ml_dtypes psutil scipy tornado sympy
 cd /data/sgl-kernel-npu
 rm -rf build output  # fresh build against torch 2.9.0 (was 2.8.0)
 bash build.sh
