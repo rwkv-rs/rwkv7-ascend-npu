@@ -18,6 +18,13 @@ recognizable structures in the world. The".
 
 Reproduce: `scripts/serve_ascend.sh` then `POST /generate`.
 
+## fla-hub/rwkv7-1.5b-world (fp32, 24 layers, hidden 2048) — scaling
+
+Serves on the 910B3 (same integration path as 0.4B). Load 6.01 GB, Mamba state
+pool 19.08 GB (1627 slots), decode cuda graph captured (bs 1..64, ~32 s), server
+"fired up and ready". Same `--dtype float32` production path. (bf16 blocked by a
+CANN 8.5.0 aclnn norm-op limitation — see git log.)
+
 ## Notes / next perf levers
 - Decode is cuda-graph captured (`npu graph: True`); the layout-agnostic
   `token_shift` (NPU conv state is `[size+1, 1, hidden]`) fixed the earlier
