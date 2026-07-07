@@ -1,0 +1,26 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  unit-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: install deps
+        run: |
+          python -m pip install -q --upgrade pip
+          pip install -q torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -q pytest
+      - name: vllm-rwkv-ascend (sampler unit + cpp-forward writeback fix)
+        run: cd vllm-rwkv-ascend && PYTHONPATH=serving python -m pytest tests/test_sampler.py tests/test_cpp_forward.py -v
+      - name: rwkv7-sglang-ascend (WKV recurrence vs reference)
+        run: cd rwkv7-sglang-ascend && PYTHONPATH=. python -m pytest tests/test_wkv_unit.py -v
+      - name: ascend-optimized (AscendC op-defs + cpp-forward structure)
+        run: cd ascend-optimized && python -m pytest tests/test_artifacts.py -v
