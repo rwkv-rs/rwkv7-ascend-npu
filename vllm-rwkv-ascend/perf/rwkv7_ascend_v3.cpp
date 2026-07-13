@@ -22,6 +22,16 @@ at::Tensor fused_ln(at::Tensor x, at::Tensor w, at::Tensor b, int64_t hidden) {
     return at::layer_norm(x, {hidden}, w, b, LN_EPS);
 }
 
+#ifdef RWKV7_USE_ADDCMUL_SHIFT_MIX
+// Benchmark-only negative experiment: faster, but fp16 FMA rounding can amplify
+// through recurrent state. Production builds intentionally leave this undefined.
+#define RWKV7_SHIFT_MIX(base, delta, mix, hidden) \
+    at::addcmul((base), (delta), (mix).view({1, (hidden)}), 1.0)
+#else
+#define RWKV7_SHIFT_MIX(base, delta, mix, hidden) \
+    ((base) + (delta) * (mix).view({1, (hidden)}))
+#endif
+
 #define RWKV7_BODY \
     int64_t L = r_weights.size(); \
     int64_t B = token_embed.size(0); \
@@ -34,12 +44,12 @@ at::Tensor fused_ln(at::Tensor x, at::Tensor w, at::Tensor b, int64_t hidden) {
         auto x_prev = xpa_all[li]; \
         auto state = state_all[li]; \
         auto xx = x_prev - h; \
-        auto xr = h + xx * x_r_list[li].view({1, hidden}); \
-        auto xw = h + xx * x_w_list[li].view({1, hidden}); \
-        auto xk = h + xx * x_k_list[li].view({1, hidden}); \
-        auto xv = h + xx * x_v_list[li].view({1, hidden}); \
-        auto xa = h + xx * x_a_list[li].view({1, hidden}); \
-        auto xg = h + xx * x_g_list[li].view({1, hidden}); \
+        auto xr = RWKV7_SHIFT_MIX(h, xx, x_r_list[li], hidden); \
+        auto xw = RWKV7_SHIFT_MIX(h, xx, x_w_list[li], hidden); \
+        auto xk = RWKV7_SHIFT_MIX(h, xx, x_k_list[li], hidden); \
+        auto xv = RWKV7_SHIFT_MIX(h, xx, x_v_list[li], hidden); \
+        auto xa = RWKV7_SHIFT_MIX(h, xx, x_a_list[li], hidden); \
+        auto xg = RWKV7_SHIFT_MIX(h, xx, x_g_list[li], hidden); \
         auto r = at::linear(xr, r_weights[li]); \
         auto k = at::linear(xk, k_weights[li]); \
         auto v = at::linear(xv, v_weights[li]); \
@@ -66,7 +76,7 @@ at::Tensor fused_ln(at::Tensor x, at::Tensor w, at::Tensor b, int64_t hidden) {
         auto h2 = fused_ln(x, ffn_norm_w[li], ffn_norm_b[li], hidden); \
         auto xx_ffn = xpf_all[li] - h2; \
         xpf_all[li].copy_(h2); \
-        auto k_ffn = h2 + xx_ffn * ffn_xk_list[li].view({1, hidden}); \
+        auto k_ffn = RWKV7_SHIFT_MIX(h2, xx_ffn, ffn_xk_list[li], hidden); \
         auto ffn_out = at::linear(at::relu(at::linear(k_ffn, ffn_key_weights[li])).pow(2), ffn_value_weights[li]); \
         x = x + ffn_out; \
     }
@@ -119,12 +129,12 @@ std::vector<at::Tensor> rwkv7_layer0_pieces(RWKV7_ARGS) {
     auto x_prev = xpa_all[0];
     auto state = state_all[0];
     auto xx = x_prev - h;
-    auto xr = h + xx * x_r_list[0].view({1, hidden});
-    auto xw = h + xx * x_w_list[0].view({1, hidden});
-    auto xk = h + xx * x_k_list[0].view({1, hidden});
-    auto xv = h + xx * x_v_list[0].view({1, hidden});
-    auto xa = h + xx * x_a_list[0].view({1, hidden});
-    auto xg = h + xx * x_g_list[0].view({1, hidden});
+    auto xr = RWKV7_SHIFT_MIX(h, xx, x_r_list[0], hidden);
+    auto xw = RWKV7_SHIFT_MIX(h, xx, x_w_list[0], hidden);
+    auto xk = RWKV7_SHIFT_MIX(h, xx, x_k_list[0], hidden);
+    auto xv = RWKV7_SHIFT_MIX(h, xx, x_v_list[0], hidden);
+    auto xa = RWKV7_SHIFT_MIX(h, xx, x_a_list[0], hidden);
+    auto xg = RWKV7_SHIFT_MIX(h, xx, x_g_list[0], hidden);
     auto r = at::linear(xr, r_weights[0]);
     auto k = at::linear(xk, k_weights[0]);
     auto v = at::linear(xv, v_weights[0]);
@@ -146,7 +156,7 @@ std::vector<at::Tensor> rwkv7_layer0_pieces(RWKV7_ARGS) {
     auto x_after = residual + attn_out;
     auto h2 = fused_ln(x_after, ffn_norm_w[0], ffn_norm_b[0], hidden);
     auto xx_ffn = xpf_all[0] - h2;
-    auto k_ffn = h2 + xx_ffn * ffn_xk_list[0].view({1, hidden});
+    auto k_ffn = RWKV7_SHIFT_MIX(h2, xx_ffn, ffn_xk_list[0], hidden);
     auto ffn_out = at::linear(at::relu(at::linear(k_ffn, ffn_key_weights[0])).pow(2), ffn_value_weights[0]);
     auto x_final = x_after + ffn_out;
     return {attn_out, x_after, ffn_out, x_final};

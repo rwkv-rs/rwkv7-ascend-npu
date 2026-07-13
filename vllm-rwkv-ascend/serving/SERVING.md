@@ -173,6 +173,11 @@ curl localhost:8001/v1/completions -H 'Content-Type: application/json' \
 > for single-request serving (B>1 still uses the eager batched forward). See
 > [`../BENCHMARK.md`](../BENCHMARK.md).
 
+> For greedy B=1 serving, add `--graph-greedy-token` (or
+> `RWKV7_GRAPH_GREEDY_TOKEN=1`) together with `--graph-decode`.  This captures argmax
+> and reuses the device token on the next consecutive replay.  Reuse is invalidated
+> whenever the scheduler enters a batched or stochastic-sampling path.
+
 
 **Cluster (router + N workers, one per NPU):**
 ```bash

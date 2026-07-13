@@ -77,6 +77,20 @@ paths produced bit-exact logits and recurrent state.  Run
 This synthetic row isolates execution overhead and does not replace the real-weight
 quality/correctness rows.
 
+An additional opt-in greedy chain captures argmax and reuses its device token as the
+next graph input (`RWKV7_GRAPH_GREEDY_TOKEN=1`).  Six alternating 100-token runs give
+2.9302 → **2.8913 ms/token** and 341.3 → **345.9 tok/s** (**1.013x**), with bit-exact
+logits/state and 64/64 token agreement.  The scheduler invalidates reuse across
+B=1/B>1 transitions.  Reproduce with `perf/bench_graph_overhead.py --compare-greedy`.
+
+Concurrent two-card validation on two 910B3s also passes the same 64-step bit-exact
+gate on both workers.  Captured-embedding throughput sums to **773.8 tok/s**
+(386.3 + 387.5); graph-resident greedy sums to **683.2 tok/s** versus **680.8 tok/s**
+for host argmax/refill, which is within run noise.  Each process used runtime device
+0 or 1 through `ASCEND_RT_VISIBLE_DEVICES` and addressed its one visible card as
+`npu:0`.  This is a synthetic 0.1B-shape concurrency row, not a real-weight serving
+claim.
+
 Bit-exact vs eager (single-step maxabs=0; multi-step greedy tokens identical —
 `tests/test_npugraph_correctness.py`). Graph latency is also **stable across runs**
 (immune to host contention — the 910B3 here is shared with sglang), where eager

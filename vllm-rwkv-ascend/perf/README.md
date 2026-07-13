@@ -46,6 +46,23 @@ The probe compares pure replay, the legacy external-embedding path, and the defa
 fixed-token-buffer path that captures embedding lookup inside NPUGraph.  It also
 requires bit-exact logits and recurrent state between the two production paths.
 
+Add `--compare-greedy` to measure the end-to-end greedy loop with argmax and the next
+token captured inside the graph.  `--compare-addcmul` is a negative-test harness: it
+reproduces a faster fp16 shift-mix whose recurrent numerical drift blocks production
+use.
+
+For multi-card isolation, launch one process per runtime-visible device and use
+`--device npu:0` inside each restricted process.  Device numbers shown by host
+`npu-smi` may differ from the runtime IDs exposed inside a container:
+
+```bash
+ASCEND_RT_VISIBLE_DEVICES=0 python perf/bench_graph_overhead.py \
+  --device npu:0 --compare-greedy &
+ASCEND_RT_VISIBLE_DEVICES=1 python perf/bench_graph_overhead.py \
+  --device npu:0 --compare-greedy &
+wait
+```
+
 ## Optimization notes (vs naive per-op)
 
 1. **Batched shift-mix**: stack `[x_r..x_g]` → 1 mul + 1 add.

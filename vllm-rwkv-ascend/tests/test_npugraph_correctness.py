@@ -147,3 +147,32 @@ def test_captured_embedding_matches_legacy_graph(eng):
             assert torch.equal(out_legacy, out_captured)
     for expected, actual in zip(state_legacy, state_captured):
         assert torch.equal(expected, actual)
+
+
+def test_graph_resident_greedy_token_matches_host_argmax(eng):
+    host = NpuGraphDecoder(eng, capture_embedding=True)
+    host.capture()
+    graph = NpuGraphDecoder(
+        eng,
+        capture_embedding=True,
+        capture_greedy_token=True,
+    )
+    graph.capture()
+    host_state = _newstate(eng)
+    graph_state = _newstate(eng)
+    host_token = 42
+    graph_token = 42
+    with torch.no_grad():
+        for step in range(16):
+            host_logits = host.decode(host_token, *host_state).clone()
+            graph_logits, graph_token = graph.decode_greedy(
+                graph_token if step == 0 else None,
+                *graph_state,
+                reuse_token=step > 0,
+            )
+            graph_logits = graph_logits.clone()
+            host_token = int(host_logits.argmax().item())
+            assert host_token == graph_token
+            assert torch.equal(host_logits, graph_logits)
+            for expected, actual in zip(host_state, graph_state):
+                assert torch.equal(expected, actual)

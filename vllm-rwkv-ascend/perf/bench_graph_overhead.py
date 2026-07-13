@@ -12,6 +12,7 @@ Example (0.1B shape on a 910B3)::
 from __future__ import annotations
 
 import argparse
+import copy
 import os
 import sys
 import time
@@ -47,6 +48,8 @@ def build_synthetic_engine(
     heads: int,
     head_size: int,
     vocab_size: int,
+    extension_name: str = "rwkv7_ascend_graph_overhead",
+    extra_cflags=None,
 ) -> types.SimpleNamespace:
     hidden = heads * head_size
     ffn = hidden * 4
@@ -55,10 +58,10 @@ def build_synthetic_engine(
     vector_cache = {}
 
     mod = load(
-        name="rwkv7_ascend_graph_overhead",
+        name=extension_name,
         sources=[cpp_source],
         verbose=False,
-        extra_cflags=["-O3", "-std=c++17"],
+        extra_cflags=extra_cflags or ["-O3", "-std=c++17"],
     )
 
     def matrices(rows: int, cols: int):
@@ -116,6 +119,27 @@ def build_synthetic_engine(
     return eng
 
 
+def _randomize_synthetic_weights(eng, seed: int) -> None:
+    """Use deterministic non-degenerate values for numerical A/B checks."""
+    torch.manual_seed(seed)
+    seen = set()
+    with torch.no_grad():
+        for index in list(range(14)) + [14, 15, 16]:
+            for tensor in eng.W[index]:
+                if tensor.data_ptr() in seen:
+                    continue
+                seen.add(tensor.data_ptr())
+                tensor.normal_(0, 0.02 if tensor.dim() > 1 else 0.01)
+        for index in list(range(17, 23)) + [28]:
+            for tensor in eng.W[index]:
+                if tensor.data_ptr() in seen:
+                    continue
+                seen.add(tensor.data_ptr())
+                tensor.uniform_(0.1, 0.9)
+        eng.base.embeddings.weight.normal_(0, 0.02)
+        eng.lm_w_m.normal_(0, 0.02)
+
+
 def _time_ms(fn, warmup: int, iterations: int) -> float:
     for _ in range(warmup):
         fn()
@@ -149,6 +173,17 @@ def main() -> None:
     parser.add_argument("--warmup", type=int, default=10)
     parser.add_argument("--iterations", type=int, default=100)
     parser.add_argument(
+        "--compare-addcmul",
+        action="store_true",
+        help="reproduce the rejected addcmul shift-mix numerical/performance A/B",
+    )
+    parser.add_argument(
+        "--compare-greedy",
+        action="store_true",
+        help="A/B host argmax/token refill against a graph-resident greedy chain",
+    )
+    parser.add_argument("--correctness-steps", type=int, default=64)
+    parser.add_argument(
         "--cpp-source",
         default=os.path.join(HERE, "rwkv7_ascend_v3.cpp"),
     )
@@ -162,10 +197,44 @@ def main() -> None:
         head_size=args.head_size,
         vocab_size=args.vocab_size,
     )
+    if args.compare_addcmul:
+        _randomize_synthetic_weights(eng, seed=20260713)
+
+    addcmul_eng = None
+    if args.compare_addcmul:
+        addcmul_eng = copy.copy(eng)
+        addcmul_eng.mod = load(
+            name="rwkv7_ascend_graph_addcmul",
+            sources=[args.cpp_source],
+            verbose=False,
+            extra_cflags=[
+                "-O3",
+                "-std=c++17",
+                "-DRWKV7_USE_ADDCMUL_SHIFT_MIX=1",
+            ],
+        )
+
+    # Load both extension variants before capturing either graph.  Loading a
+    # second module after capture can interpose the shared C++ entry-point
+    # symbols and invalidate an otherwise clean A/B comparison.
     legacy_decoder = NpuGraphDecoder(eng, capture_embedding=False)
     legacy_decoder.capture()
     decoder = NpuGraphDecoder(eng, capture_embedding=True)
     decoder.capture()
+
+    addcmul_decoder = None
+    if addcmul_eng is not None:
+        addcmul_decoder = NpuGraphDecoder(addcmul_eng, capture_embedding=True)
+        addcmul_decoder.capture()
+
+    greedy_decoder = None
+    if args.compare_greedy:
+        greedy_decoder = NpuGraphDecoder(
+            eng,
+            capture_embedding=True,
+            capture_greedy_token=True,
+        )
+        greedy_decoder.capture()
 
     legacy_state = _new_state(eng, args.device)
     captured_state = _new_state(eng, args.device)
@@ -191,6 +260,87 @@ def main() -> None:
                 raise AssertionError("captured embedding recurrent state differs")
     print("correctness legacy_vs_captured bit_exact=true", flush=True)
 
+    if greedy_decoder is not None:
+        host_state = _new_state(eng, args.device)
+        graph_state = _new_state(eng, args.device)
+        host_token = token
+        graph_token = token
+        greedy_matches = 0
+        bit_exact = True
+        with torch.no_grad():
+            for step in range(args.correctness_steps):
+                host_logits = decoder.decode(host_token, *host_state).clone()
+                graph_logits, graph_token = greedy_decoder.decode_greedy(
+                    graph_token if step == 0 else None,
+                    *graph_state,
+                    reuse_token=step > 0,
+                )
+                graph_logits = graph_logits.clone()
+                host_token = int(host_logits.argmax().item())
+                greedy_matches += int(host_token == graph_token)
+                bit_exact = bit_exact and torch.equal(host_logits, graph_logits)
+                bit_exact = bit_exact and all(
+                    torch.equal(reference, actual)
+                    for reference, actual in zip(host_state, graph_state)
+                )
+        print(
+            "correctness host_vs_graph_greedy bit_exact=%s greedy=%d/%d"
+            % (str(bit_exact).lower(), greedy_matches, args.correctness_steps),
+            flush=True,
+        )
+        if not bit_exact or greedy_matches != args.correctness_steps:
+            raise AssertionError("graph-resident greedy token chain diverged")
+
+    if addcmul_decoder is not None:
+        reference_state = _new_state(eng, args.device)
+        addcmul_state = _new_state(eng, args.device)
+        min_cosine = 1.0
+        max_logit_abs = 0.0
+        max_state_abs = 0.0
+        greedy_matches = 0
+        reference_token = token
+        addcmul_token = token
+        with torch.no_grad():
+            for _ in range(args.correctness_steps):
+                reference_logits = decoder.decode(
+                    reference_token, *reference_state
+                ).clone()
+                addcmul_logits = addcmul_decoder.decode(
+                    addcmul_token, *addcmul_state
+                ).clone()
+                torch.npu.synchronize()
+                cosine = torch.nn.functional.cosine_similarity(
+                    reference_logits.float(), addcmul_logits.float()
+                ).item()
+                min_cosine = min(min_cosine, cosine)
+                max_logit_abs = max(
+                    max_logit_abs,
+                    (reference_logits.float() - addcmul_logits.float())
+                    .abs()
+                    .max()
+                    .item(),
+                )
+                for reference, actual in zip(reference_state, addcmul_state):
+                    max_state_abs = max(
+                        max_state_abs,
+                        (reference.float() - actual.float()).abs().max().item(),
+                    )
+                reference_token = int(reference_logits.argmax().item())
+                addcmul_token = int(addcmul_logits.argmax().item())
+                greedy_matches += int(reference_token == addcmul_token)
+        print(
+            "correctness default_vs_addcmul min_cosine=%.9f "
+            "max_logit_abs=%.6f max_state_abs=%.6f greedy=%d/%d"
+            % (
+                min_cosine,
+                max_logit_abs,
+                max_state_abs,
+                greedy_matches,
+                args.correctness_steps,
+            ),
+            flush=True,
+        )
+
     def replay_only():
         legacy_decoder.graph.replay()
 
@@ -206,12 +356,48 @@ def main() -> None:
     def production_decode():
         decoder.decode(token, *captured_state)
 
+    if addcmul_decoder is not None:
+        addcmul_perf_state = _new_state(eng, args.device)
+
+        def addcmul_production_decode():
+            addcmul_decoder.decode(token, *addcmul_perf_state)
+
+    if greedy_decoder is not None:
+        greedy_host_state = _new_state(eng, args.device)
+        greedy_graph_state = _new_state(eng, args.device)
+        greedy_host_token = token
+        greedy_graph_token = token
+        greedy_graph_started = False
+
+        def greedy_host_roundtrip():
+            nonlocal greedy_host_token
+            logits = decoder.decode(greedy_host_token, *greedy_host_state)
+            greedy_host_token = int(logits.argmax().item())
+
+        def greedy_graph_chain():
+            nonlocal greedy_graph_token, greedy_graph_started
+            _, greedy_graph_token = greedy_decoder.decode_greedy(
+                greedy_graph_token if not greedy_graph_started else None,
+                *greedy_graph_state,
+                reuse_token=greedy_graph_started,
+            )
+            greedy_graph_started = True
+
     rows = [
         ("graph_replay", replay_only),
         ("embedding_plus_replay", embedding_and_replay),
         ("legacy_production", legacy_production_decode),
         ("captured_embedding", production_decode),
     ]
+    if addcmul_decoder is not None:
+        rows.append(("addcmul_shift_mix", addcmul_production_decode))
+    if greedy_decoder is not None:
+        rows.extend(
+            [
+                ("greedy_host_roundtrip", greedy_host_roundtrip),
+                ("greedy_graph_chain", greedy_graph_chain),
+            ]
+        )
     print(
         "shape L=%d H=%d N=%d hidden=%d vocab=%d"
         % (eng.L, eng.H, eng.N, eng.hidden, args.vocab_size),
@@ -240,6 +426,29 @@ def main() -> None:
         ),
         flush=True,
     )
+    if addcmul_decoder is not None:
+        addcmul = timings["addcmul_shift_mix"]
+        print(
+            "addcmul_gain_vs_default %8.3f ms  %6.2f%%  %6.2fx"
+            % (
+                captured - addcmul,
+                (captured / addcmul - 1.0) * 100.0,
+                captured / addcmul,
+            ),
+            flush=True,
+        )
+    if greedy_decoder is not None:
+        greedy_host = timings["greedy_host_roundtrip"]
+        greedy_graph = timings["greedy_graph_chain"]
+        print(
+            "greedy_graph_gain %8.3f ms  %6.2f%%  %6.2fx"
+            % (
+                greedy_host - greedy_graph,
+                (greedy_host / greedy_graph - 1.0) * 100.0,
+                greedy_host / greedy_graph,
+            ),
+            flush=True,
+        )
 
 
 if __name__ == "__main__":
