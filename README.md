@@ -16,6 +16,11 @@ run. The dynamic cache-policy row remains below it, so this result is not a broa
 Albatross parity claim. Reproduction details are in
 [`vllm-rwkv-ascend/perf/ascendc/direct/README.md`](vllm-rwkv-ascend/perf/ascendc/direct/README.md).
 
+For a reproducible three-way comparison against Qwen3.5 and the Albatross RWKV
+engine, including single-card, multi-card, quality, memory, and result-table
+requirements, see
+[`BENCHMARK_QWEN35_ALBATROSS.md`](BENCHMARK_QWEN35_ALBATROSS.md).
+
 **RWKV-7 inference + serving on the Huawei Ascend 910B3 NPU — fast, correct, and at
 A100 parity for single-stream decode.**
 
