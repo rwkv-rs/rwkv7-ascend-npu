@@ -68,6 +68,15 @@ re-runs it with a single host launch, removing the dispatch overhead. Measured o
 | 1.5B | 8 | 34.7 | 11.3 | 230 | 711 | 3.1× |
 | 1.5B | 64 | 32.4 | 23.6 | 1978 | 2708 | 1.4× |
 
+The production B=1 path now captures the token embedding lookup as well as the
+forward.  On 2026-07-13, a checkpoint-free 0.1B-shape A/B on the same 910B3
+(CANN 8.5.0, torch_npu 2.9.0, 100 iterations) reduced production latency from
+2.871 ms / 348.3 tok/s to **2.626 ms / 380.8 tok/s** (**1.09x**).  The old and new
+paths produced bit-exact logits and recurrent state.  Run
+`python perf/bench_graph_overhead.py --warmup 10 --iterations 100` to reproduce.
+This synthetic row isolates execution overhead and does not replace the real-weight
+quality/correctness rows.
+
 Bit-exact vs eager (single-step maxabs=0; multi-step greedy tokens identical —
 `tests/test_npugraph_correctness.py`). Graph latency is also **stable across runs**
 (immune to host contention — the 910B3 here is shared with sglang), where eager

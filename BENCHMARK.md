@@ -30,6 +30,32 @@ replays it per token, removing the per-step host-dispatch overhead. (`perf/bench
 **Correctness:** bit-exact vs eager — single-step cosine 0.999995, maxabs 0; multi-step
 greedy token sequences identical (`tests/test_npugraph_correctness.py`, 2/2 pass).
 
+### Captured token embedding (2026-07-13)
+
+The serving path previously built a device token tensor and ran the embedding lookup
+outside NPUGraph on every token.  A fixed-address int64 token buffer now moves the
+embedding lookup into the captured graph while preserving the scheduler-state copies
+needed for safe B=1/B>1 transitions.
+
+On an Ascend 910B3 with CANN 8.5.0 and torch_npu 2.9.0, the self-contained 0.1B-shape
+probe (`L=12,H=12,N=64,vocab=65536`, 100 iterations) reports:
+
+| path | ms/step | tok/s | vs legacy production |
+|---|---:|---:|---:|
+| pure graph replay | 2.580 | 387.6 | — |
+| legacy production (external embedding + state copies) | 2.871 | 348.3 | 1.00x |
+| captured embedding + state copies | **2.626** | **380.8** | **1.09x** |
+
+Legacy and captured paths produce bit-exact logits and recurrent state over a
+multi-token check.  Reproduce without a checkpoint or Transformers install:
+
+```bash
+python vllm-rwkv-ascend/perf/bench_graph_overhead.py --warmup 10 --iterations 100
+```
+
+This is a same-shape synthetic performance A/B, not a model-quality result.  It does
+not replace the real-checkpoint rows above.
+
 **Two things to notice in the table:**
 - **Eager latency is B-independent** (0.1B: 16.7ms at B=1, 16.6ms at B=64; 1.5B: 35.3ms
   vs 32.4ms). Decode is **dispatch-bound**, not compute — the GEMV itself is ~free.

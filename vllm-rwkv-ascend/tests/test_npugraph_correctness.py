@@ -129,3 +129,21 @@ def test_multistep_greedy_matches_eager(eng):
                 toks.append(int(o.reshape(-1, VOCAB)[-1].argmax()))
         return toks
     assert eager_gen(42) == graph_gen(42)
+
+
+def test_captured_embedding_matches_legacy_graph(eng):
+    legacy = NpuGraphDecoder(eng, capture_embedding=False)
+    legacy.capture()
+    captured = NpuGraphDecoder(eng, capture_embedding=True)
+    captured.capture()
+    state_legacy = _newstate(eng)
+    state_captured = _newstate(eng)
+    with torch.no_grad():
+        for token in [42, 7, 1024, 13]:
+            out_legacy = legacy.decode(token, *state_legacy).clone()
+            out_captured = captured.decode(
+                torch.tensor([token], device=DEV), *state_captured
+            ).clone()
+            assert torch.equal(out_legacy, out_captured)
+    for expected, actual in zip(state_legacy, state_captured):
+        assert torch.equal(expected, actual)

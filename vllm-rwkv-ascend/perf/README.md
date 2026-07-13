@@ -36,6 +36,16 @@ PYTHONPATH=/root/rwkv7-ascend:. python perf/run_perf.py /root/rwkv7-ascend/model
 
 First call compiles the extension (~30 s, cached afterwards by torch cpp_extension).
 
+To measure production graph overhead without downloading a model, run:
+
+```bash
+python perf/bench_graph_overhead.py --warmup 10 --iterations 100
+```
+
+The probe compares pure replay, the legacy external-embedding path, and the default
+fixed-token-buffer path that captures embedding lookup inside NPUGraph.  It also
+requires bit-exact logits and recurrent state between the two production paths.
+
 ## Optimization notes (vs naive per-op)
 
 1. **Batched shift-mix**: stack `[x_r..x_g]` → 1 mul + 1 add.
@@ -44,6 +54,7 @@ First call compiles the extension (~30 s, cached afterwards by torch cpp_extensi
 4. `at::NoGradGuard` skips autograd graph build.
 5. All `at::layer_norm` / `at::group_norm` fused.
 
-Single-seq 2× Albatross still needs GEMV-Cube fusion (multi-month); but
-**batched aggregate throughput at B>1 already clears 2× Albatross** (see main
-README).
+Custom AscendC Cube GEMV is not the single-sequence path: the measured B=1 kernel is
+33x slower than `at::linear`.  Continue reducing graph-external work and coalescing
+elementwise/recurrence operations instead.  Batched aggregate throughput at B>1
+already clears 2x Albatross (see the main README).
