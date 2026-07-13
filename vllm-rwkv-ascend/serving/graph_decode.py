@@ -5,8 +5,9 @@ launches per step; on the 910B3 each carries ~17us of host dispatch overhead, so
 single-sequence decode step costs ~16ms (~60 tok/s) — purely dispatch-bound, not
 compute (at::linear latency is identical at B=1 and B=128).
 
-`torch.npu.NPUGraph` records the whole step into one device-side graph; `replay()`
-re-runs it with a single host launch, collapsing the dispatch overhead. Measured on
+`torch.npu.NPUGraph` records the embedding lookup and whole step into one
+device-side graph; `replay()` re-runs them with a single host launch, collapsing
+the dispatch overhead. Measured on
 the 910B3 (CANN 8.5.0): 0.1B B=1 16.3ms -> 2.8ms (**5.9x**, 60 -> 358 tok/s, matching
 an A100's CUDA-graph decode); 1.5B B=1 33ms -> 8.9ms (3.7x, 30 -> 114 tok/s). Bit-exact
 vs eager (single-step maxabs=0; multi-step greedy tokens identical).
@@ -17,6 +18,10 @@ graph (which evolves the state in place), and copies the evolved state back. The
 scheduler stays the source of truth, so mid-flight joins/leaves (B=1 -> B>1 -> B=1)
 are safe. Copy cost is ~13MB @ ~1.5TB/s ≈ 8us per step — negligible next to the ~14ms
 saved. B>1 falls back to the eager batched forward (not graph-captured).
+
+The optional greedy-token capture also records argmax and writes the result back to
+the fixed-address token input. Consecutive B=1 greedy replays can then avoid a device
+argmax launch and host-to-device refill without changing model math.
 """
 import torch
 import torch_npu  # noqa: F401  (registers npu; required for torch.npu.graph)
@@ -30,49 +35,93 @@ class NpuGraphDecoder:
     use the engine's eager batched forward.
     """
 
-    def __init__(self, eng):
+    def __init__(self, eng, capture_embedding=True, capture_greedy_token=False):
         self.eng = eng
+        self.capture_embedding = capture_embedding
+        self.capture_greedy_token = capture_greedy_token
         L, H, N, hd = eng.L, eng.H, eng.N, eng.hidden
         self.dev = eng.lm_w_m.device
+        # Streams and NPUGraph capture use the process-current NPU.  Do not rely
+        # on it already matching the engine: multi-NPU validation may construct
+        # an engine directly on npu:1 without first calling set_device().
+        torch.npu.set_device(self.dev)
         # dedicated B=1 buffers — fixed addresses, captured into the graph
         self.sa = torch.zeros(L, 1, H, N, N, dtype=torch.float32, device=self.dev)
         self.xp = torch.zeros(L, 1, hd, dtype=torch.float16, device=self.dev)
         self.xf = torch.zeros(L, 1, hd, dtype=torch.float16, device=self.dev)
         self.vf = torch.zeros(1, hd, dtype=torch.float16, device=self.dev)
+        self.token_ids = torch.zeros(1, dtype=torch.long, device=self.dev)
+        # Retain the legacy input buffer for A/B benchmarks and compatibility.
         self.emb = torch.zeros(1, hd, dtype=torch.float16, device=self.dev)
         self.logits = None
         self.graph = None
 
     def _fwd(self):
         eng = self.eng
+        token_embed = (
+            (
+                eng.mod.rwkv7_embedding_norm2(
+                    self.token_ids,
+                    eng.base.embeddings.weight,
+                    eng.W[34][0],
+                    eng.W[35][0],
+                    eng.W[30][0],
+                    eng.W[31][0],
+                    self.xp[0],
+                )
+                if hasattr(eng.mod, "rwkv7_embedding_norm2")
+                else (
+                    eng.mod.rwkv7_embedding(
+                        self.token_ids, eng.base.embeddings.weight
+                    )
+                    if hasattr(eng.mod, "rwkv7_embedding")
+                    else eng.base.embeddings(self.token_ids)
+                )
+            )
+            if self.capture_embedding
+            else self.emb
+        )
         return eng.mod.rwkv7_decode_full(
-            self.emb, *eng.W, self.sa, self.xp, self.xf, self.vf,
+            token_embed, *eng.W, self.sa, self.xp, self.xf, self.vf,
             eng.H, eng.N, eng.lm_w_m, eng.fnorm_w, eng.fnorm_b)
+
+    def _set_token(self, token_id):
+        if isinstance(token_id, torch.Tensor):
+            self.token_ids.copy_(token_id.reshape(-1)[:1])
+        else:
+            self.token_ids.fill_(int(token_id))
+
+    def _captured_step(self):
+        logits = self._fwd()
+        if self.capture_greedy_token:
+            self.token_ids.copy_(logits.argmax(dim=-1))
+        return logits
 
     def capture(self, warmup=5):
         """Warm up + capture the decode step into an NPUGraph. Call once after the
         engine + C++ module are loaded."""
         with torch.no_grad():
             for _ in range(warmup):
-                self.logits = self._fwd()
+                self.logits = self._captured_step()
         torch.npu.synchronize()
         # side-stream warmup is required for a clean capture
         s = torch.npu.Stream(); s.wait_stream(torch.npu.current_stream())
         with torch.npu.stream(s):
             for _ in range(warmup):
-                self.logits = self._fwd()
+                self.logits = self._captured_step()
         torch.npu.current_stream().wait_stream(s)
         self.graph = torch.npu.NPUGraph()
         with torch.npu.graph(self.graph):
-            self.logits = self._fwd()
+            self.logits = self._captured_step()
         torch.npu.synchronize()
 
-    def decode(self, token_id, sa_slot, xp_slot, xf_slot, vf_slot):
+    def _decode(self, token_id, sa_slot, xp_slot, xf_slot, vf_slot, reuse_token):
         """One decode step via graph replay.
 
-        Copies the scheduler's active-slot state into the dedicated buffers, sets the
-        input embedding, replays the graph (evolving the dedicated state in place),
-        copies the evolved state back to the scheduler slots, and returns the logits
+        Copies the scheduler's active-slot state into the dedicated buffers, updates
+        the fixed-address token input, replays the graph (including embedding lookup
+        and evolving the dedicated state in place), copies the evolved state back to
+        the scheduler slots, and returns the logits
         (a view of the captured output buffer — read before the next replay).
         """
         # scheduler slot -> dedicated buffer
@@ -80,7 +129,12 @@ class NpuGraphDecoder:
         self.xp[:, 0:1].copy_(xp_slot)
         self.xf[:, 0:1].copy_(xf_slot)
         self.vf[0:1].copy_(vf_slot)
-        self.emb.copy_(self.eng.base.embeddings(torch.tensor([token_id], device=self.dev)))
+        if self.capture_embedding and not reuse_token:
+            self._set_token(token_id)
+        elif not self.capture_embedding:
+            self.emb.copy_(
+                self.eng.base.embeddings(torch.tensor([token_id], device=self.dev))
+            )
         self.graph.replay()
         # evolved dedicated buffer -> scheduler slot (scheduler stays authoritative)
         sa_slot.copy_(self.sa[:, 0:1])
@@ -88,3 +142,57 @@ class NpuGraphDecoder:
         xf_slot.copy_(self.xf[:, 0:1])
         vf_slot.copy_(self.vf[0:1])
         return self.logits
+
+    def decode(self, token_id, sa_slot, xp_slot, xf_slot, vf_slot):
+        """Decode one supplied token and return logits."""
+        return self._decode(
+            token_id, sa_slot, xp_slot, xf_slot, vf_slot, reuse_token=False
+        )
+
+    def load_resident_state(self, sa_slot, xp_slot, xf_slot, vf_slot):
+        """Load one B=1 sequence into the graph-resident recurrent cache."""
+        self.sa[:, 0:1].copy_(sa_slot)
+        self.xp[:, 0:1].copy_(xp_slot)
+        self.xf[:, 0:1].copy_(xf_slot)
+        self.vf[0:1].copy_(vf_slot)
+
+    def replay_resident(self, token_id=None):
+        """Replay against resident state without scheduler-slot round trips.
+
+        ``token_id=None`` reuses the token already stored in ``token_ids``.
+        This is the steady-state B=1 session path; callers must save resident
+        state before returning the sequence to a dynamic-batch scheduler.
+        """
+        if token_id is not None:
+            self._set_token(token_id)
+        self.graph.replay()
+        return self.logits
+
+    def save_resident_state(self, sa_slot, xp_slot, xf_slot, vf_slot):
+        """Save graph-resident state back to scheduler-owned B=1 slots."""
+        sa_slot.copy_(self.sa[:, 0:1])
+        xp_slot.copy_(self.xp[:, 0:1])
+        xf_slot.copy_(self.xf[:, 0:1])
+        vf_slot.copy_(self.vf[0:1])
+
+    def decode_greedy(
+        self,
+        token_id,
+        sa_slot,
+        xp_slot,
+        xf_slot,
+        vf_slot,
+        *,
+        reuse_token=False,
+    ):
+        """Decode and return the graph-computed greedy token.
+
+        With ``reuse_token=True``, the previous replay's argmax remains in the
+        fixed-address token buffer and feeds the next replay directly.
+        """
+        if not self.capture_greedy_token:
+            raise RuntimeError("greedy token capture was not enabled")
+        logits = self._decode(
+            token_id, sa_slot, xp_slot, xf_slot, vf_slot, reuse_token=reuse_token
+        )
+        return logits, int(self.token_ids.item())

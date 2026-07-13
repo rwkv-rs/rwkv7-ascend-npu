@@ -58,6 +58,7 @@ class SlottedScheduler:
         self.xf = torch.zeros(L, 0, hd, dtype=torch.float16, device=DEV)
         self.vf = torch.zeros(0, hd, dtype=torch.float16, device=DEV)
         self.seqs = []; self.B = 0; self.tok_count = 0
+        self._graph_token_seq = None
 
     def add(self, seq):
         (sa, xp, xf, vf), first = prefill_one(self.eng, seq.prompt_ids)
@@ -89,21 +90,46 @@ class SlottedScheduler:
         self.xp = torch.zeros(L, 0, hd, dtype=torch.float16, device=DEV)
         self.xf = torch.zeros(L, 0, hd, dtype=torch.float16, device=DEV)
         self.vf = torch.zeros(0, hd, dtype=torch.float16, device=DEV)
-        self.seqs = []; self.B = 0
+        self.seqs = []; self.B = 0; self._graph_token_seq = None
 
     def step(self, loop=None):
         if self.B == 0:
             return []
+        nxt = None
         if self.B == 1 and self.graph_decoder is not None:
             # B=1 fast path: NPUGraph replay (collapses ~960 launches -> 1 device replay)
             seq0 = self.seqs[0]
-            logits = self.graph_decoder.decode(seq0.next, self.sa[:, 0:1], self.xp[:, 0:1],
-                                                self.xf[:, 0:1], self.vf[0:1])
+            if (
+                seq0.cfg.temperature <= 0
+                and self.graph_decoder.capture_greedy_token
+            ):
+                reuse_token = self._graph_token_seq is seq0
+                logits, greedy_token = self.graph_decoder.decode_greedy(
+                    None if reuse_token else seq0.next,
+                    self.sa[:, 0:1],
+                    self.xp[:, 0:1],
+                    self.xf[:, 0:1],
+                    self.vf[0:1],
+                    reuse_token=reuse_token,
+                )
+                nxt = [greedy_token]
+                self._graph_token_seq = seq0
+            else:
+                self._graph_token_seq = None
+                logits = self.graph_decoder.decode(
+                    seq0.next,
+                    self.sa[:, 0:1],
+                    self.xp[:, 0:1],
+                    self.xf[:, 0:1],
+                    self.vf[0:1],
+                )
         else:
+            self._graph_token_seq = None
             emb = self.eng.base.embeddings(torch.tensor([s.next for s in self.seqs], device=DEV))
             logits = self.eng.mod.rwkv7_decode_full(emb, *self.eng.W, self.sa, self.xp, self.xf, self.vf,
                                                      self.eng.H, self.eng.N, self.eng.lm_w_m, self.eng.fnorm_w, self.eng.fnorm_b)
-        nxt = sample_rows(logits, [s.cfg for s in self.seqs])
+        if nxt is None:
+            nxt = sample_rows(logits, [s.cfg for s in self.seqs])
         done = []
         for i in range(self.B):
             seq = self.seqs[i]
@@ -142,6 +168,8 @@ class SlottedScheduler:
                 else:
                     seq.fut.set_result(seq.final_text)
             results.append(seq); self._shrink(i)
+        if self._graph_token_seq in results:
+            self._graph_token_seq = None
         return results
 
 
@@ -289,13 +317,19 @@ if __name__ == "__main__":
     ap.add_argument("--graph-decode", action="store_true",
                     default=os.environ.get("RWKV7_GRAPH_DECODE", "0") == "1",
                     help="capture a B=1 NPUGraph decode fast path (~5.9x lower single-seq latency)")
+    ap.add_argument("--graph-greedy-token", action="store_true",
+                    default=os.environ.get("RWKV7_GRAPH_GREEDY_TOKEN", "0") == "1",
+                    help="capture greedy argmax + next-token reuse inside the B=1 graph")
     args = ap.parse_args()
     eng = RWKV7Engine(args.model, args.H, args.N, args.L)
     tok = _RWKVTrie(args.vocab)
     _eng = eng; _tok = tok
     if args.graph_decode:
         print("[server] capturing B=1 NPUGraph decode fast path...", flush=True)
-        _graph_decoder = NpuGraphDecoder(eng)
+        _graph_decoder = NpuGraphDecoder(
+            eng,
+            capture_greedy_token=args.graph_greedy_token,
+        )
         _graph_decoder.capture()
         print("[server] NPUGraph captured (B=1 decode accelerated)", flush=True)
     import uvicorn

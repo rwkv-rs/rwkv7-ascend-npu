@@ -30,6 +30,71 @@ replays it per token, removing the per-step host-dispatch overhead. (`perf/bench
 **Correctness:** bit-exact vs eager — single-step cosine 0.999995, maxabs 0; multi-step
 greedy token sequences identical (`tests/test_npugraph_correctness.py`, 2/2 pass).
 
+### Captured token embedding (2026-07-13)
+
+The serving path previously built a device token tensor and ran the embedding lookup
+outside NPUGraph on every token.  A fixed-address int64 token buffer now moves the
+embedding lookup into the captured graph while preserving the scheduler-state copies
+needed for safe B=1/B>1 transitions.
+
+On an Ascend 910B3 with CANN 8.5.0 and torch_npu 2.9.0, the self-contained 0.1B-shape
+probe (`L=12,H=12,N=64,vocab=65536`, 100 iterations) reports:
+
+| path | ms/step | tok/s | vs legacy production |
+|---|---:|---:|---:|
+| pure graph replay | 2.580 | 387.6 | — |
+| legacy production (external embedding + state copies) | 2.871 | 348.3 | 1.00x |
+| captured embedding + state copies | **2.626** | **380.8** | **1.09x** |
+
+Legacy and captured paths produce bit-exact logits and recurrent state over a
+multi-token check.  Reproduce without a checkpoint or Transformers install:
+
+```bash
+python vllm-rwkv-ascend/perf/bench_graph_overhead.py --warmup 10 --iterations 100
+```
+
+This is a same-shape synthetic performance A/B, not a model-quality result.  It does
+not replace the real-checkpoint rows above.
+
+### Graph-resident greedy token chain (2026-07-13)
+
+Greedy serving previously replayed the decode graph, launched `argmax` outside the
+graph, copied the token to Python, then refilled the graph input on the next step.
+The opt-in `RWKV7_GRAPH_GREEDY_TOKEN=1` path captures argmax and leaves its result in
+the fixed-address token buffer for the next consecutive B=1 replay.  Python still
+reads the token for streaming text, but the redundant device launch and refill are
+removed.  Dynamic B=1 → B>1 → B=1 transitions explicitly invalidate reuse.
+
+Six alternating 100-token runs on the 910B3 give the conservative median:
+
+| end-to-end greedy loop | ms/token | tok/s | speedup |
+|---|---:|---:|---:|
+| host argmax + token refill | 2.9302 | 341.3 | 1.00x |
+| graph argmax + token reuse | **2.8913** | **345.9** | **1.013x** |
+
+The 64-step gate is bit-exact for logits and recurrent state with 64/64 greedy-token
+agreement.  A device profile also shows why deeper work is still required: MatMul is
+32.2% of sampled NPU time, while Mul + Cast + Add account for 38.4%.  A built-in
+`addcmul` shift-mix probe reduced latency another ~2%, but failed random recurrent
+correctness (minimum cosine 0.264, greedy 61/64), so it remains benchmark-only and is
+not exposed by the serving engine.
+
+```bash
+python vllm-rwkv-ascend/perf/bench_graph_overhead.py \
+  --compare-greedy --correctness-steps 64 --warmup 10 --iterations 100
+```
+
+Two-card isolation was also checked on the same host with two 910B3 devices
+(runtime IDs 0/1, shown by `npu-smi` as host physical IDs 3/5).  Two benchmark
+processes ran concurrently, each restricted with `ASCEND_RT_VISIBLE_DEVICES` and
+using its local `npu:0`.  Both devices passed the 64-step bit-exact logits/state
+gate and 64/64 greedy-token agreement.  Concurrent captured-embedding throughput
+was 386.3 + 387.5 = **773.8 tok/s**.  The opt-in greedy chain was 343.8 + 339.4 =
+**683.2 tok/s**, versus 340.5 + 340.3 = **680.8 tok/s** for host argmax/refill;
+that 0.35% difference is treated as noise, so the multi-card claim is correctness
+and independent scaling rather than a stable greedy-chain speedup.  These remain
+synthetic 0.1B-shape rows, not real-checkpoint serving evidence.
+
 **Two things to notice in the table:**
 - **Eager latency is B-independent** (0.1B: 16.7ms at B=1, 16.6ms at B=64; 1.5B: 35.3ms
   vs 32.4ms). Decode is **dispatch-bound**, not compute — the GEMV itself is ~free.
