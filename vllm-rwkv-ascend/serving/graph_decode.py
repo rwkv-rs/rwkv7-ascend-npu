@@ -59,7 +59,25 @@ class NpuGraphDecoder:
     def _fwd(self):
         eng = self.eng
         token_embed = (
-            eng.base.embeddings(self.token_ids)
+            (
+                eng.mod.rwkv7_embedding_norm2(
+                    self.token_ids,
+                    eng.base.embeddings.weight,
+                    eng.W[34][0],
+                    eng.W[35][0],
+                    eng.W[30][0],
+                    eng.W[31][0],
+                    self.xp[0],
+                )
+                if hasattr(eng.mod, "rwkv7_embedding_norm2")
+                else (
+                    eng.mod.rwkv7_embedding(
+                        self.token_ids, eng.base.embeddings.weight
+                    )
+                    if hasattr(eng.mod, "rwkv7_embedding")
+                    else eng.base.embeddings(self.token_ids)
+                )
+            )
             if self.capture_embedding
             else self.emb
         )
@@ -130,6 +148,32 @@ class NpuGraphDecoder:
         return self._decode(
             token_id, sa_slot, xp_slot, xf_slot, vf_slot, reuse_token=False
         )
+
+    def load_resident_state(self, sa_slot, xp_slot, xf_slot, vf_slot):
+        """Load one B=1 sequence into the graph-resident recurrent cache."""
+        self.sa[:, 0:1].copy_(sa_slot)
+        self.xp[:, 0:1].copy_(xp_slot)
+        self.xf[:, 0:1].copy_(xf_slot)
+        self.vf[0:1].copy_(vf_slot)
+
+    def replay_resident(self, token_id=None):
+        """Replay against resident state without scheduler-slot round trips.
+
+        ``token_id=None`` reuses the token already stored in ``token_ids``.
+        This is the steady-state B=1 session path; callers must save resident
+        state before returning the sequence to a dynamic-batch scheduler.
+        """
+        if token_id is not None:
+            self._set_token(token_id)
+        self.graph.replay()
+        return self.logits
+
+    def save_resident_state(self, sa_slot, xp_slot, xf_slot, vf_slot):
+        """Save graph-resident state back to scheduler-owned B=1 slots."""
+        sa_slot.copy_(self.sa[:, 0:1])
+        xp_slot.copy_(self.xp[:, 0:1])
+        xf_slot.copy_(self.xf[:, 0:1])
+        vf_slot.copy_(self.vf[0:1])
 
     def decode_greedy(
         self,

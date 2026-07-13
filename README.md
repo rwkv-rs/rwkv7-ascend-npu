@@ -1,5 +1,21 @@
 # rwkv7-ascend-npu
 
+## Current direct-fusion update (910B2C, 2026-07-13)
+
+The opt-in Vector Core backend now fuses recurrence preparation with the fp32
+rank-one state update. On the synthetic 0.1B-shaped B=1 decode row, two pinned
+200-warmup/2000-iteration confirmations measure `0.650-0.662 ms/token`
+(`1509.8-1537.3 tok/s`) when the recurrent cache remains resident in the captured
+graph. The dynamic state-slot path measures `0.675-0.684 ms/token`
+(`1462.5-1481.7 tok/s`). All 64 greedy tokens match, minimum logits cosine is
+`0.999999344`, and maximum fp32 state difference is `0.00585938`.
+
+The resident-cache row clears the provisional `1500 tok/s` target used for this
+optimization pass, but that target is not a same-checkpoint, same-card Albatross
+run. The dynamic cache-policy row remains below it, so this result is not a broad
+Albatross parity claim. Reproduction details are in
+[`vllm-rwkv-ascend/perf/ascendc/direct/README.md`](vllm-rwkv-ascend/perf/ascendc/direct/README.md).
+
 **RWKV-7 inference + serving on the Huawei Ascend 910B3 NPU — fast, correct, and at
 A100 parity for single-stream decode.**
 

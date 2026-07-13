@@ -36,6 +36,29 @@ PYTHONPATH=/root/rwkv7-ascend:. python perf/run_perf.py /root/rwkv7-ascend/model
 
 First call compiles the extension (~30 s, cached afterwards by torch cpp_extension).
 
+## 910B2C direct fused result (2026-07-13)
+
+The opt-in direct AscendC backend combines the DPLR rank-one recurrence, state
+output, groupnorm/SK/gating, key normalization, packed low-rank paths, static
+shift-mix projection folding, and a fused recurrence-preparation/state kernel.
+On one Ascend 910B2C with CANN 8.5.1, the synthetic 12-layer `H=12`, `N=64`,
+vocab-65536 row passes 64/64 greedy tokens with minimum logits cosine
+`0.999999344` and maximum state difference `0.00585938`.
+
+Two pinned 200-warmup/2000-iteration confirmations measure `0.650` and `0.662`
+ms/token (`1537.3` and `1509.8 tok/s`) for graph-resident recurrent state. The
+dynamic state-slot scheduler measures `0.675-0.684 ms/token`
+(`1462.5-1481.7 tok/s`). The resident row therefore clears the provisional
+`1500 tok/s` development target, while the dynamic row does not. Because
+`1500 tok/s` is not a same-checkpoint/same-card Albatross measurement, this is
+not a general Albatross parity claim. The folded projection also adds about
+90 MiB for this synthetic shape and therefore remains opt-in. See
+`ascendc/direct/README.md` for the exact build and benchmark command.
+
+The validation host exposes only one Ascend device. Prior two-process graph-path
+isolation evidence does not validate this new direct kernel, so fresh direct-path
+multi-card evidence remains pending a machine with at least two visible NPUs.
+
 To measure production graph overhead without downloading a model, run:
 
 ```bash
