@@ -8,6 +8,7 @@ cycle — a bug masked by single-step cos=1.0 and `bench_batch` re-zeroing state
 
 Pure file inspection — runs in GitHub Actions on CPU.
 """
+import ast
 import os
 
 _HERE = os.path.dirname(__file__)
@@ -39,3 +40,22 @@ def test_addcmul_shift_mix_remains_benchmark_only():
     engine_path = os.path.join(_HERE, "..", "serving", "serve_engine.py")
     engine = open(engine_path, "r", encoding="utf-8", errors="replace").read()
     assert "RWKV7_ADDCMUL_SHIFT_MIX" not in engine
+
+
+def test_prefill_scan_loader_returns_compiled_extension():
+    path = os.path.join(_HERE, "..", "perf", "bench_rwkv7_pth_prefill.py")
+    tree = ast.parse(open(path, encoding="utf-8").read())
+    loader = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "load_ascendc_prefill_scan"
+    )
+
+    assert any(
+        isinstance(node, ast.Return)
+        and isinstance(node.value, ast.Call)
+        and isinstance(node.value.func, ast.Name)
+        and node.value.func.id == "load"
+        for node in ast.walk(loader)
+    )

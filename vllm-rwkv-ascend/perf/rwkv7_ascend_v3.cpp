@@ -64,6 +64,26 @@
 #include "torch_npu/csrc/framework/OpCommand.h"
 #include "aclrtlaunch_rwkv_prefill_scan_direct.h"
 #endif
+#ifdef RWKV7_USE_CHUNK_INVERSE
+#include "torch_npu/csrc/core/npu/NPUStream.h"
+#include "torch_npu/csrc/framework/OpCommand.h"
+#include "aclrtlaunch_rwkv_chunk_inverse_direct.h"
+#endif
+#ifdef RWKV7_USE_CHUNK_GATE_PREP
+#include "torch_npu/csrc/core/npu/NPUStream.h"
+#include "torch_npu/csrc/framework/OpCommand.h"
+#include "aclrtlaunch_rwkv_chunk_gate_prep_direct.h"
+#endif
+#ifdef RWKV7_USE_CHUNK_MASK
+#include "torch_npu/csrc/core/npu/NPUStream.h"
+#include "torch_npu/csrc/framework/OpCommand.h"
+#include "aclrtlaunch_rwkv_chunk_mask_direct.h"
+#endif
+#ifdef RWKV7_USE_PREFILL_SHIFT_MIX
+#include "torch_npu/csrc/core/npu/NPUStream.h"
+#include "torch_npu/csrc/framework/OpCommand.h"
+#include "aclrtlaunch_rwkv_prefill_shift_mix_direct.h"
+#endif
 
 static const float EXP_HALF = 0.606531f;
 static const double LN_EPS = 1e-5;
@@ -152,6 +172,353 @@ static std::vector<at::Tensor> rwkv7_ascendc_shift_mix2(
 }
 #endif
 
+#ifdef RWKV7_USE_PREFILL_SHIFT_MIX
+static at::Tensor rwkv7_ascendc_prefill_shift_mix_direct(
+        const at::Tensor& x,
+        const at::Tensor& previous,
+        const at::Tensor& mix1,
+        const at::Tensor& mix2,
+        const at::Tensor& mix3,
+        const at::Tensor& mix4,
+        const at::Tensor& mix5,
+        const at::Tensor& mix6,
+        int64_t rows_per_block_value) {
+    TORCH_CHECK(
+        x.scalar_type() == at::kHalf && x.dim() == 3 && x.is_contiguous(),
+        "prefill shift-mix requires contiguous fp16 [B,T,D] input");
+    TORCH_CHECK(
+        previous.scalar_type() == at::kHalf && previous.dim() == 2 &&
+            previous.size(0) == x.size(0) && previous.size(1) == x.size(2) &&
+            previous.is_contiguous(),
+        "prefill shift-mix previous state must be contiguous fp16 [B,D]");
+    const int64_t hidden_value = x.size(2);
+    std::array<const at::Tensor*, 6> mixes = {
+        &mix1, &mix2, &mix3, &mix4, &mix5, &mix6};
+    for (const at::Tensor* mix : mixes) {
+        TORCH_CHECK(
+            mix->scalar_type() == at::kHalf && mix->numel() == hidden_value &&
+                mix->is_contiguous(),
+            "prefill shift-mix weights must be contiguous fp16 [D]");
+    }
+    auto output = at::empty(
+        {10, x.size(0), x.size(1), hidden_value}, x.options());
+    auto stream = c10_npu::getCurrentNPUStream().stream(false);
+    const uint32_t rows = static_cast<uint32_t>(x.size(0) * x.size(1));
+    const uint32_t tokens = static_cast<uint32_t>(x.size(1));
+    const uint32_t hidden = static_cast<uint32_t>(hidden_value);
+    TORCH_CHECK(
+        rows_per_block_value == 4 || rows_per_block_value == 8 ||
+            rows_per_block_value == 16 || rows_per_block_value == 32,
+        "prefill shift-mix rows_per_block must be 4, 8, 16, or 32");
+    const uint32_t rows_per_block =
+        static_cast<uint32_t>(rows_per_block_value);
+    const uint32_t row_blocks =
+        (rows + rows_per_block - 1) / rows_per_block;
+    const uint32_t block_dim = 10 * row_blocks;
+    std::array<void*, 9> pointers = {
+        const_cast<void*>(x.data_ptr()),
+        const_cast<void*>(previous.data_ptr()),
+        const_cast<void*>(mix1.data_ptr()),
+        const_cast<void*>(mix2.data_ptr()),
+        const_cast<void*>(mix3.data_ptr()),
+        const_cast<void*>(mix4.data_ptr()),
+        const_cast<void*>(mix5.data_ptr()),
+        const_cast<void*>(mix6.data_ptr()),
+        output.data_ptr()};
+    auto launch = [
+        stream, block_dim, pointers, rows, tokens, hidden, row_blocks,
+        rows_per_block]() -> int {
+        ACLRT_LAUNCH_KERNEL(rwkv_prefill_shift_mix_direct)(
+            block_dim, stream, pointers[0], pointers[1], pointers[2],
+            pointers[3], pointers[4], pointers[5], pointers[6], pointers[7],
+            pointers[8], rows, tokens, hidden, row_blocks, rows_per_block);
+        return 0;
+    };
+    at_npu::native::OpCommand::RunOpApi(
+        "rwkv_prefill_shift_mix_direct", launch);
+    return output;
+}
+
+static at::Tensor rwkv7_ascendc_prefill_shift_mix1_direct(
+        const at::Tensor& x,
+        const at::Tensor& previous,
+        const at::Tensor& mix,
+        int64_t rows_per_block_value) {
+    TORCH_CHECK(
+        x.scalar_type() == at::kHalf && x.dim() == 3 && x.is_contiguous(),
+        "prefill shift-mix1 requires contiguous fp16 [B,T,D] input");
+    TORCH_CHECK(
+        previous.scalar_type() == at::kHalf && previous.dim() == 2 &&
+            previous.size(0) == x.size(0) && previous.size(1) == x.size(2) &&
+            previous.is_contiguous(),
+        "prefill shift-mix1 previous state must be contiguous fp16 [B,D]");
+    TORCH_CHECK(
+        mix.scalar_type() == at::kHalf && mix.numel() == x.size(2) &&
+            mix.is_contiguous(),
+        "prefill shift-mix1 weight must be contiguous fp16 [D]");
+    TORCH_CHECK(
+        rows_per_block_value == 4 || rows_per_block_value == 8 ||
+            rows_per_block_value == 16 || rows_per_block_value == 32,
+        "prefill shift-mix1 rows_per_block must be 4, 8, 16, or 32");
+    auto output = at::empty_like(x);
+    auto stream = c10_npu::getCurrentNPUStream().stream(false);
+    const uint32_t rows = static_cast<uint32_t>(x.size(0) * x.size(1));
+    const uint32_t tokens = static_cast<uint32_t>(x.size(1));
+    const uint32_t hidden = static_cast<uint32_t>(x.size(2));
+    const uint32_t rows_per_block =
+        static_cast<uint32_t>(rows_per_block_value);
+    const uint32_t row_blocks =
+        (rows + rows_per_block - 1) / rows_per_block;
+    const uint32_t block_dim = row_blocks;
+    std::array<void*, 4> pointers = {
+        const_cast<void*>(x.data_ptr()),
+        const_cast<void*>(previous.data_ptr()),
+        const_cast<void*>(mix.data_ptr()),
+        output.data_ptr()};
+    auto launch = [
+        stream, block_dim, pointers, rows, tokens, hidden, row_blocks,
+        rows_per_block]() -> int {
+        ACLRT_LAUNCH_KERNEL(rwkv_prefill_shift_mix_direct)(
+            block_dim, stream, pointers[0], pointers[1], pointers[2],
+            pointers[2], pointers[2], pointers[2], pointers[2], pointers[2],
+            pointers[3], rows, tokens, hidden, row_blocks, rows_per_block);
+        return 0;
+    };
+    at_npu::native::OpCommand::RunOpApi(
+        "rwkv_prefill_shift_mix1_direct", launch);
+    return output;
+}
+#endif
+
+#ifdef RWKV7_USE_CHUNK_GATE_PREP
+static std::vector<at::Tensor> rwkv7_ascendc_chunk_gate_prep_impl(
+        const at::Tensor& log_decay,
+        const at::Tensor& k,
+        const at::Tensor& v,
+        const at::Tensor& kk,
+        const at::Tensor& a,
+        const at::Tensor& r,
+        int64_t chunk_size_value,
+        int64_t heads_value,
+        int64_t width_value,
+        bool output_bf16) {
+    TORCH_CHECK(
+        log_decay.scalar_type() == at::kHalf && log_decay.dim() == 3,
+        "chunk gate prep requires fp16 [B,T,H*N] log decay");
+    TORCH_CHECK(
+        k.sizes() == log_decay.sizes() && v.sizes() == log_decay.sizes() &&
+            kk.sizes() == log_decay.sizes() && a.sizes() == log_decay.sizes() &&
+            r.sizes() == log_decay.sizes(),
+        "chunk gate prep vector shapes must match");
+    TORCH_CHECK(
+        width_value == 64 && chunk_size_value > 0 && chunk_size_value <= 128,
+        "chunk gate prep requires N=64 and C<=128");
+    TORCH_CHECK(
+        log_decay.size(2) == heads_value * width_value &&
+            log_decay.size(1) % chunk_size_value == 0,
+        "chunk gate prep hidden/prompt shape mismatch");
+    auto log_c = log_decay.contiguous();
+    auto k_c = k.contiguous();
+    auto v_c = v.contiguous();
+    auto kk_c = kk.contiguous();
+    auto a_c = a.contiguous();
+    auto r_c = r.contiguous();
+    const int64_t batch = log_c.size(0);
+    const int64_t tokens = log_c.size(1);
+    const int64_t chunks = tokens / chunk_size_value;
+    const int64_t groups = batch * chunks * heads_value;
+    auto float_options = log_c.options().dtype(at::kFloat);
+    auto factor_options = output_bf16
+        ? log_c.options().dtype(at::kBFloat16)
+        : float_options;
+    auto qg = at::empty({groups, chunk_size_value, width_value}, factor_options);
+    auto kg = at::empty_like(qg);
+    auto ag = at::empty_like(qg);
+    auto bg = at::empty_like(qg);
+    auto v_chunk = at::empty_like(qg);
+    auto q_state = at::empty_like(qg);
+    auto state_keys = at::empty(
+        {groups, 2 * chunk_size_value, width_value}, factor_options);
+    auto end_decay = at::empty({groups, width_value}, float_options);
+    auto offset_exp = at::empty_like(end_decay);
+    auto stream = c10_npu::getCurrentNPUStream().stream(false);
+    const uint32_t block_dim = static_cast<uint32_t>(groups);
+    std::array<void*, 15> pointers = {
+        log_c.data_ptr(), k_c.data_ptr(), v_c.data_ptr(), kk_c.data_ptr(),
+        a_c.data_ptr(), r_c.data_ptr(), qg.data_ptr(), kg.data_ptr(),
+        ag.data_ptr(), bg.data_ptr(), v_chunk.data_ptr(), q_state.data_ptr(),
+        state_keys.data_ptr(), end_decay.data_ptr(), offset_exp.data_ptr()};
+    const uint32_t tokens_u = static_cast<uint32_t>(tokens);
+    const uint32_t heads_u = static_cast<uint32_t>(heads_value);
+    const uint32_t width_u = static_cast<uint32_t>(width_value);
+    const uint32_t chunk_u = static_cast<uint32_t>(chunk_size_value);
+    const uint32_t chunks_u = static_cast<uint32_t>(chunks);
+    const uint32_t output_bf16_u = output_bf16 ? 1U : 0U;
+    auto launch = [
+        stream, block_dim, pointers, tokens_u, heads_u, width_u, chunk_u,
+        chunks_u, output_bf16_u]() -> int {
+        ACLRT_LAUNCH_KERNEL(rwkv_chunk_gate_prep_direct)(
+            block_dim, stream, pointers[0], pointers[1], pointers[2],
+            pointers[3], pointers[4], pointers[5], pointers[6], pointers[7],
+            pointers[8], pointers[9], pointers[10], pointers[11], pointers[12],
+            pointers[13], pointers[14], tokens_u, heads_u, width_u, chunk_u,
+            chunks_u, output_bf16_u);
+        return 0;
+    };
+    at_npu::native::OpCommand::RunOpApi(
+        "rwkv_chunk_gate_prep_direct", launch);
+    return {
+        qg, kg, ag, bg, v_chunk, q_state, state_keys, end_decay,
+        offset_exp};
+}
+
+static std::vector<at::Tensor> rwkv7_ascendc_chunk_gate_prep_direct(
+        const at::Tensor& log_decay,
+        const at::Tensor& k,
+        const at::Tensor& v,
+        const at::Tensor& kk,
+        const at::Tensor& a,
+        const at::Tensor& r,
+        int64_t chunk_size_value,
+        int64_t heads_value,
+        int64_t width_value) {
+    return rwkv7_ascendc_chunk_gate_prep_impl(
+        log_decay, k, v, kk, a, r, chunk_size_value, heads_value,
+        width_value, false);
+}
+
+static std::vector<at::Tensor> rwkv7_ascendc_chunk_gate_prep_bf16_direct(
+        const at::Tensor& log_decay,
+        const at::Tensor& k,
+        const at::Tensor& v,
+        const at::Tensor& kk,
+        const at::Tensor& a,
+        const at::Tensor& r,
+        int64_t chunk_size_value,
+        int64_t heads_value,
+        int64_t width_value) {
+    return rwkv7_ascendc_chunk_gate_prep_impl(
+        log_decay, k, v, kk, a, r, chunk_size_value, heads_value,
+        width_value, true);
+}
+#endif
+
+#ifdef RWKV7_USE_CHUNK_MASK
+static std::vector<at::Tensor> rwkv7_ascendc_chunk_mask_impl(
+        const at::Tensor& a_qk,
+        const at::Tensor& a_qb,
+        const at::Tensor& a_ak,
+        const at::Tensor& a_ab,
+        bool input_bf16) {
+    TORCH_CHECK(
+        a_qk.scalar_type() ==
+                (input_bf16 ? at::kBFloat16 : at::kFloat) &&
+            a_qk.dim() == 3 &&
+            a_qk.size(1) == a_qk.size(2) && a_qk.size(1) <= 128 &&
+            a_qk.size(1) % 8 == 0,
+        "chunk mask requires fp32/bf16 [groups,C,C], C<=128 and C%8==0");
+    TORCH_CHECK(
+        a_qb.sizes() == a_qk.sizes() && a_ak.sizes() == a_qk.sizes() &&
+            a_ab.sizes() == a_qk.sizes(),
+        "chunk mask matrix shapes must match");
+    TORCH_CHECK(
+        a_qb.scalar_type() == a_qk.scalar_type() &&
+            a_ak.scalar_type() == a_qk.scalar_type(),
+        "chunk mask consumed matrix dtypes must match");
+    TORCH_CHECK(
+        a_qk.is_contiguous() && a_qb.is_contiguous() &&
+            a_ak.is_contiguous() && a_ab.is_contiguous(),
+        "chunk mask matrices must be contiguous");
+    auto stream = c10_npu::getCurrentNPUStream().stream(false);
+    const uint32_t block_dim = static_cast<uint32_t>(a_qk.size(0));
+    const uint32_t matrix_size = static_cast<uint32_t>(a_qk.size(1));
+    const uint32_t input_bf16_u = input_bf16 ? 1U : 0U;
+    std::array<void*, 4> pointers = {
+        const_cast<void*>(a_qk.data_ptr()),
+        const_cast<void*>(a_qb.data_ptr()),
+        const_cast<void*>(a_ak.data_ptr()),
+        const_cast<void*>(a_ab.data_ptr())};
+    auto launch = [
+        stream, block_dim, pointers, matrix_size, input_bf16_u]() -> int {
+        ACLRT_LAUNCH_KERNEL(rwkv_chunk_mask_direct)(
+            block_dim, stream, pointers[0], pointers[1], pointers[2],
+            pointers[3], matrix_size, input_bf16_u);
+        return 0;
+    };
+    at_npu::native::OpCommand::RunOpApi("rwkv_chunk_mask_direct", launch);
+    return {a_qk, a_qb, a_ak, a_ab};
+}
+
+static std::vector<at::Tensor> rwkv7_ascendc_chunk_mask_direct(
+        const at::Tensor& a_qk,
+        const at::Tensor& a_qb,
+        const at::Tensor& a_ak,
+        const at::Tensor& a_ab) {
+    return rwkv7_ascendc_chunk_mask_impl(a_qk, a_qb, a_ak, a_ab, false);
+}
+
+static std::vector<at::Tensor> rwkv7_ascendc_chunk_mask_bf16_direct(
+        const at::Tensor& a_qk,
+        const at::Tensor& a_qb,
+        const at::Tensor& a_ak,
+        const at::Tensor& a_ab) {
+    return rwkv7_ascendc_chunk_mask_impl(a_qk, a_qb, a_ak, a_ab, true);
+}
+#endif
+
+#ifdef RWKV7_USE_CHUNK_INVERSE
+static at::Tensor rwkv7_ascendc_chunk_inverse_impl(
+        const at::Tensor& lower, bool input_bf16, bool output_bf16) {
+    TORCH_CHECK(
+        lower.scalar_type() ==
+                (input_bf16 ? at::kBFloat16 : at::kFloat) &&
+            lower.dim() == 3,
+        "chunk inverse input dtype/shape mismatch");
+    TORCH_CHECK(
+        lower.size(1) == lower.size(2) && lower.size(1) <= 128,
+        "chunk inverse requires square C<=128 matrices");
+    auto lower_contiguous = lower.contiguous();
+    auto output = at::empty(
+        lower_contiguous.sizes(),
+        output_bf16
+            ? lower_contiguous.options().dtype(at::kBFloat16)
+            : lower_contiguous.options());
+    auto stream = c10_npu::getCurrentNPUStream().stream(false);
+    const uint32_t block_dim = static_cast<uint32_t>(lower.size(0));
+    const uint32_t matrix_size = static_cast<uint32_t>(lower.size(1));
+    const uint32_t input_bf16_u = input_bf16 ? 1U : 0U;
+    const uint32_t output_bf16_u = output_bf16 ? 1U : 0U;
+    void* lower_data = lower_contiguous.data_ptr();
+    void* output_data = output.data_ptr();
+    auto launch = [
+        stream, block_dim, lower_data, output_data, matrix_size,
+        input_bf16_u, output_bf16_u]() -> int {
+        ACLRT_LAUNCH_KERNEL(rwkv_chunk_inverse_direct)(
+            block_dim, stream, lower_data, output_data, matrix_size,
+            input_bf16_u, output_bf16_u);
+        return 0;
+    };
+    at_npu::native::OpCommand::RunOpApi(
+        "rwkv_chunk_inverse_direct", launch);
+    return output;
+}
+
+static at::Tensor rwkv7_ascendc_chunk_inverse_direct(
+        const at::Tensor& lower) {
+    return rwkv7_ascendc_chunk_inverse_impl(lower, false, false);
+}
+
+static at::Tensor rwkv7_ascendc_chunk_inverse_bf16_direct(
+        const at::Tensor& lower) {
+    return rwkv7_ascendc_chunk_inverse_impl(lower, false, true);
+}
+
+static at::Tensor rwkv7_ascendc_chunk_inverse_bf16_io_direct(
+        const at::Tensor& lower) {
+    return rwkv7_ascendc_chunk_inverse_impl(lower, true, true);
+}
+#endif
+
 #ifdef RWKV7_USE_PREFILL_SCAN
 static std::vector<at::Tensor> rwkv7_ascendc_prefill_scan_direct(
         const at::Tensor& state,
@@ -162,7 +529,8 @@ static std::vector<at::Tensor> rwkv7_ascendc_prefill_scan_direct(
         const at::Tensor& a,
         const at::Tensor& r,
         int64_t heads,
-        int64_t head_size) {
+        int64_t head_size,
+        int64_t row_blocks_value) {
     TORCH_CHECK(head_size == 64, "prefill scan requires N=64");
     TORCH_CHECK(
         state.scalar_type() == at::kFloat,
@@ -180,7 +548,10 @@ static std::vector<at::Tensor> rwkv7_ascendc_prefill_scan_direct(
     auto stream = c10_npu::getCurrentNPUStream().stream(false);
     const int64_t batch_size = w.dim() == 3 ? w.size(0) : 1;
     const int64_t token_count = w.dim() == 3 ? w.size(1) : w.size(0);
-    constexpr uint32_t row_blocks = 2;
+    TORCH_CHECK(
+        row_blocks_value == 1 || row_blocks_value == 2,
+        "prefill scan row_blocks must be 1 or 2");
+    const uint32_t row_blocks = static_cast<uint32_t>(row_blocks_value);
     TORCH_CHECK(
         state.numel() == batch_size * heads * head_size * head_size,
         "prefill scan state batch does not match vector batch");
@@ -1164,10 +1535,12 @@ static at::Tensor rwkv7_ascendc_embedding_norm2_direct(
 #define RWKV7_VALUE_MIX(v, v_first, mix) \
     ((v) + ((v_first) - (v)) * (mix))
 #define RWKV7_HEAD_SCALED_ADD(x, scale, v, H, N) \
-    ((x) + ((scale) * (v).view({1, (H), (N)})).view({1, (H) * (N)}))
+    ((x) + ((scale) * (v).view({(v).size(0), (H), (N)})).view( \
+        {(v).size(0), (H) * (N)}))
 #define RWKV7_SK_OUTPUT(x, r, k, r_k, v, H, N) \
     ([&]() { \
-        auto _sk = ((r).view({1, (H), (N)}) * (k).view({1, (H), (N)}) * \
+        auto _sk = ((r).view({(r).size(0), (H), (N)}) * \
+                    (k).view({(k).size(0), (H), (N)}) * \
                     (r_k).view({1, (H), (N)})).sum(-1, true); \
         return RWKV7_HEAD_SCALED_ADD((x), _sk, (v), (H), (N)); \
     }())
@@ -1682,5 +2055,43 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     m.def(
         "rwkv7_prefill_scan", &rwkv7_ascendc_prefill_scan_direct,
         "batched layer-major fused recurrent prefill scan");
+#endif
+#ifdef RWKV7_USE_CHUNK_INVERSE
+    m.def(
+        "rwkv7_chunk_inverse", &rwkv7_ascendc_chunk_inverse_direct,
+        "batched fp32 unit-lower chunk inverse");
+    m.def(
+        "rwkv7_chunk_inverse_bf16",
+        &rwkv7_ascendc_chunk_inverse_bf16_direct,
+        "batched fp32 unit-lower chunk inverse with bf16 output");
+    m.def(
+        "rwkv7_chunk_inverse_bf16_io",
+        &rwkv7_ascendc_chunk_inverse_bf16_io_direct,
+        "batched bf16 unit-lower chunk inverse with bf16 output");
+#endif
+#ifdef RWKV7_USE_CHUNK_GATE_PREP
+    m.def(
+        "rwkv7_chunk_gate_prep", &rwkv7_ascendc_chunk_gate_prep_direct,
+        "fused fp16-to-fp32 DPLR chunk gate and layout preparation");
+    m.def(
+        "rwkv7_chunk_gate_prep_bf16",
+        &rwkv7_ascendc_chunk_gate_prep_bf16_direct,
+        "fused fp16-to-bf16 DPLR chunk gate and layout preparation");
+#endif
+#ifdef RWKV7_USE_CHUNK_MASK
+    m.def(
+        "rwkv7_chunk_mask3", &rwkv7_ascendc_chunk_mask_direct,
+        "fused in-place DPLR causal masks for the three consumed matrices");
+    m.def(
+        "rwkv7_chunk_mask3_bf16", &rwkv7_ascendc_chunk_mask_bf16_direct,
+        "fused in-place bf16 DPLR causal masks for three matrices");
+#endif
+#ifdef RWKV7_USE_PREFILL_SHIFT_MIX
+    m.def(
+        "rwkv7_prefill_shift_mix", &rwkv7_ascendc_prefill_shift_mix_direct,
+        "fused prefill shift-mix plus low-rank packing");
+    m.def(
+        "rwkv7_prefill_shift_mix1", &rwkv7_ascendc_prefill_shift_mix1_direct,
+        "fused prefill single shift-mix");
 #endif
 }

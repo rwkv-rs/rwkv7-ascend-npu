@@ -9,8 +9,6 @@ from __future__ import annotations
 import argparse
 import gc
 import json
-import os
-import platform
 import statistics
 import time
 from pathlib import Path
@@ -21,6 +19,14 @@ import transformers
 from transformers.models.qwen3_5.modeling_qwen3_5 import (
     Qwen3_5ForConditionalGeneration,
 )
+
+from benchmark_metadata import (
+    checkpoint_metadata,
+    collect_cann_metadata,
+    collect_npu_metadata,
+    npu_device_id,
+)
+from npu_memory import PeakNPUMemorySampler
 
 
 def _percentile(values: list[float], fraction: float) -> float:
@@ -120,6 +126,7 @@ def _time_decode(
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", required=True)
+    parser.add_argument("--checkpoint-revision")
     parser.add_argument("--device", default="npu:0")
     parser.add_argument("--dtype", choices=("fp16", "bf16"), default="fp16")
     parser.add_argument("--batch-sizes", default="1,4")
@@ -139,11 +146,14 @@ def main() -> None:
     torch.manual_seed(20260714)
     torch.npu.set_device(args.device)
     torch.npu.reset_peak_memory_stats(args.device)
+    device_id = npu_device_id(args.device)
+    load_memory_sampler = PeakNPUMemorySampler([device_id]).start()
     model = Qwen3_5ForConditionalGeneration.from_pretrained(
         args.model,
         dtype=dtype,
     ).eval().to(args.device)
     torch.npu.synchronize()
+    load_peak_memory_mib = load_memory_sampler.stop()
 
     model_parameters = sum(parameter.numel() for parameter in model.parameters())
     model_bytes = sum(
@@ -155,6 +165,8 @@ def main() -> None:
     rows = []
 
     for batch_size in batch_sizes:
+        torch.npu.reset_peak_memory_stats(args.device)
+        workload_memory_sampler = PeakNPUMemorySampler([device_id]).start()
         input_ids = torch.randint(
             0,
             vocab_size,
@@ -174,9 +186,11 @@ def main() -> None:
             steps=args.decode_steps,
         )
         peak_memory = torch.npu.max_memory_allocated(args.device)
+        process_peak_memory = workload_memory_sampler.stop()
         row = {
             "batch_size": batch_size,
             "prompt_length": args.prompt_length,
+            "decode_length": args.decode_steps,
             "prefill_latency_ms_median": prefill_ms,
             "prefill_latency_ms_p90": _percentile(prefill_samples, 0.90),
             "prefill_tokens_per_second": (
@@ -186,7 +200,11 @@ def main() -> None:
             "decode_latency_ms_p50": _percentile(decode_samples, 0.50),
             "decode_latency_ms_p90": _percentile(decode_samples, 0.90),
             "decode_tokens_per_second": batch_size * 1000.0 / decode_ms,
-            "peak_memory_mib": peak_memory / 2**20,
+            "peak_memory_mib": process_peak_memory,
+            "peak_memory_scope": workload_memory_sampler.scope,
+            "peak_memory_phase": "prefill_decode",
+            "torch_peak_memory_mib": peak_memory / 2**20,
+            "memory_sampler_errors": workload_memory_sampler.errors,
         }
         rows.append(row)
         print(json.dumps(row, ensure_ascii=False), flush=True)
@@ -196,17 +214,18 @@ def main() -> None:
 
     result = {
         "benchmark": "qwen35_transformers_npu",
-        "model": os.path.abspath(args.model),
         "architecture": type(model).__name__,
+        "engine_version": transformers.__version__,
         "dtype": args.dtype,
-        "device": args.device,
+        "decode_length": args.decode_steps,
         "model_parameters": model_parameters,
         "model_bytes": model_bytes,
         "loaded_memory_mib": loaded_memory / 2**20,
-        "torch": torch.__version__,
-        "torch_npu": torch_npu.__version__,
+        "load_peak_memory_mib": load_peak_memory_mib,
         "transformers": transformers.__version__,
-        "python": platform.python_version(),
+        **checkpoint_metadata(args.model, revision=args.checkpoint_revision),
+        **collect_cann_metadata(),
+        **collect_npu_metadata(torch, torch_npu, args.device),
         "rows": rows,
     }
     if args.output:

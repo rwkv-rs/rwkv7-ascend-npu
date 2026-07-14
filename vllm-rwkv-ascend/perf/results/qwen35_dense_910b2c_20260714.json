@@ -1,0 +1,122 @@
+{
+  "benchmark": "qwen35_dense_evidence",
+  "model": "fixed-five-tier-matrix",
+  "date": "2026-07-14",
+  "device_name": "Ascend910B2C",
+  "device_count": 1,
+  "dtype": "fp16",
+  "cann": "8.5.1",
+  "torch": "2.9.0+cpu",
+  "torch_npu": "2.9.0rc1",
+  "peak_memory_scope": "all_npu_processes_on_selected_devices",
+  "method": "warmup=1, median of 5 unless the remote source name contains probe; decode_length=128",
+  "rows": [
+    {
+      "tier_id": "dense-0", "model_family": "qwen", "model_key": "qwen3.5-0.8b", "engine": "vllm_ascend_eager",
+      "batch_size": 1, "prompt_length": 512, "decode_length": 128,
+      "prefill_tokens_per_second": 8858.32091511002, "decode_tokens_per_second": 64.9254606942386, "peak_memory_mib": 30099.0,
+      "remote_source": "dense0_qwen_b1_p512_median5.json"
+    },
+    {
+      "tier_id": "dense-0", "model_family": "rwkv", "model_key": "rwkv7-0.4b", "engine": "rwkv7_ascendc",
+      "batch_size": 1, "prompt_length": 512, "decode_length": 128,
+      "prefill_tokens_per_second": 14446.201750968627, "decode_tokens_per_second": 146.1613184739399, "peak_memory_mib": 1414.0,
+      "correctness_passed": true, "correctness_length": 512, "logits_cosine": 0.9999960660934448,
+      "remote_source": "dense0_rwkv_b1_p512_best_full.json"
+    },
+    {
+      "tier_id": "dense-0", "model_family": "qwen", "model_key": "qwen3.5-0.8b", "engine": "vllm_ascend_eager",
+      "batch_size": 4, "prompt_length": 512, "decode_length": 128,
+      "prefill_tokens_per_second": 18237.732602836655, "decode_tokens_per_second": 247.32943884124904, "peak_memory_mib": 30159.0,
+      "remote_source": "dense0_qwen_b4_p512_median5.json"
+    },
+    {
+      "tier_id": "dense-0", "model_family": "rwkv", "model_key": "rwkv7-0.4b", "engine": "rwkv7_ascendc",
+      "batch_size": 4, "prompt_length": 512, "decode_length": 128,
+      "prefill_tokens_per_second": 31220.972350344335, "decode_tokens_per_second": 470.09832888914815, "peak_memory_mib": 1770.0,
+      "correctness_passed": true, "correctness_length": 512, "logits_cosine": 0.9999961853027344,
+      "remote_source": "dense0_rwkv_b4_p512_best_full.json"
+    },
+    {
+      "tier_id": "dense-0", "model_family": "qwen", "model_key": "qwen3.5-0.8b", "engine": "vllm_ascend_eager",
+      "batch_size": 1, "prompt_length": 2048, "decode_length": 128,
+      "prefill_tokens_per_second": 26697.198808080106, "decode_tokens_per_second": 65.43290495999689, "peak_memory_mib": 30179.0,
+      "remote_source": "dense0_qwen_b1_p2048_median5.json"
+    },
+    {
+      "tier_id": "dense-0", "model_family": "rwkv", "model_key": "rwkv7-0.4b", "engine": "rwkv7_ascendc",
+      "batch_size": 1, "prompt_length": 2048, "decode_length": 128,
+      "prefill_tokens_per_second": 28667.407999430492, "decode_tokens_per_second": 149.83504957774784, "peak_memory_mib": 1700.0,
+      "correctness_passed": true, "correctness_length": 2048, "logits_cosine": 0.9999915361404419,
+      "remote_source": "dense0_rwkv_b1_p2048_best_full.json"
+    },
+    {
+      "tier_id": "dense-0", "model_family": "qwen", "model_key": "qwen3.5-0.8b", "engine": "vllm_ascend_eager",
+      "batch_size": 4, "prompt_length": 2048, "decode_length": 128,
+      "prefill_tokens_per_second": 42359.39558082723, "decode_tokens_per_second": 246.23870833456277, "peak_memory_mib": 30559.0,
+      "remote_source": "dense0_qwen_b4_p2048_median5.json"
+    },
+    {
+      "tier_id": "dense-0", "model_family": "rwkv", "model_key": "rwkv7-0.4b", "engine": "rwkv7_ascendc_npugraph",
+      "batch_size": 4, "prompt_length": 2048, "decode_length": 128,
+      "prefill_tokens_per_second": 43134.04130295712, "decode_tokens_per_second": 472.7937931345958, "peak_memory_mib": 2938.0,
+      "correctness_passed": true, "correctness_length": 8, "logits_cosine": 0.9999994039535522,
+      "graph_logits_max_abs": 0.0, "graph_state_max_abs": 0.0,
+      "remote_source": "dense0_rwkv_b4_p2048_graph_full.json"
+    },
+    {
+      "tier_id": "dense-1", "model_family": "qwen", "model_key": "qwen3.5-2b", "engine": "vllm_ascend_eager",
+      "batch_size": 1, "prompt_length": 512, "decode_length": 128,
+      "prefill_tokens_per_second": 8773.379278432274, "decode_tokens_per_second": 65.73239869611517, "peak_memory_mib": 29717.0,
+      "remote_source": "dense1_qwen_b1_p512_median5.json"
+    },
+    {
+      "tier_id": "dense-1", "model_family": "rwkv", "model_key": "rwkv7-1.5b", "engine": "rwkv7_ascendc",
+      "batch_size": 1, "prompt_length": 512, "decode_length": 128,
+      "prefill_tokens_per_second": 10838.10631820841, "decode_tokens_per_second": 110.04994146321039, "peak_memory_mib": 4404.0,
+      "correctness_passed": true, "correctness_length": 512, "logits_cosine": 0.9999985694885254,
+      "remote_source": "dense1_rwkv_b1_p512_best_full.json"
+    },
+    {
+      "tier_id": "dense-1", "model_family": "qwen", "model_key": "qwen3.5-2b", "engine": "vllm_ascend_eager",
+      "batch_size": 4, "prompt_length": 512, "decode_length": 128,
+      "prefill_tokens_per_second": 16610.196324579487, "decode_tokens_per_second": 247.5871845398221, "peak_memory_mib": 29777.0,
+      "remote_source": "dense1_qwen_b4_p512_median5.json"
+    },
+    {
+      "tier_id": "dense-1", "model_family": "rwkv", "model_key": "rwkv7-1.5b", "engine": "rwkv7_ascendc",
+      "batch_size": 4, "prompt_length": 512, "decode_length": 128,
+      "prefill_tokens_per_second": 19187.31976194177, "decode_tokens_per_second": 378.16349216150377, "peak_memory_mib": 5118.0,
+      "correctness_passed": true, "correctness_length": 512, "logits_cosine": 0.9999971389770508,
+      "remote_source": "dense1_rwkv_b4_p512_best_full.json"
+    },
+    {
+      "tier_id": "dense-1", "model_family": "qwen", "model_key": "qwen3.5-2b", "engine": "vllm_ascend_eager",
+      "batch_size": 1, "prompt_length": 2048, "decode_length": 128,
+      "prefill_tokens_per_second": 22707.543986768822, "decode_tokens_per_second": 65.27946820105007, "peak_memory_mib": 29817.0,
+      "remote_source": "dense1_qwen_b1_p2048_median5.json"
+    },
+    {
+      "tier_id": "dense-1", "model_family": "rwkv", "model_key": "rwkv7-1.5b", "engine": "rwkv7_ascendc_npugraph",
+      "batch_size": 1, "prompt_length": 2048, "decode_length": 128,
+      "prefill_tokens_per_second": 18870.959696264796, "decode_tokens_per_second": 107.49721920699761, "peak_memory_mib": 4990.0,
+      "correctness_passed": true, "correctness_length": 2048, "logits_cosine": 0.9999973177909851,
+      "graph_logits_max_abs": 0.0, "graph_state_max_abs": 0.0,
+      "remote_source": "dense1_rwkv_b1_p2048_tree_root_final.json"
+    },
+    {
+      "tier_id": "dense-1", "model_family": "qwen", "model_key": "qwen3.5-2b", "engine": "vllm_ascend_eager",
+      "batch_size": 4, "prompt_length": 2048, "decode_length": 128,
+      "prefill_tokens_per_second": 34065.90059291992, "decode_tokens_per_second": 247.64964243373592, "peak_memory_mib": 30237.0,
+      "remote_source": "dense1_qwen_b4_p2048_median5.json"
+    },
+    {
+      "tier_id": "dense-1", "model_family": "rwkv", "model_key": "rwkv7-1.5b", "engine": "rwkv7_ascendc_npugraph",
+      "batch_size": 4, "prompt_length": 2048, "decode_length": 128,
+      "prefill_tokens_per_second": 21930.12596086559, "decode_tokens_per_second": 379.42561743933743, "peak_memory_mib": 7634.0,
+      "correctness_passed": true, "correctness_length": 8, "logits_cosine": 0.9999990463256836,
+      "graph_logits_max_abs": 0.0, "graph_state_max_abs": 0.0,
+      "remote_source": "dense1_rwkv_b4_p2048_tree_root_graph_probe.json"
+    }
+  ]
+}

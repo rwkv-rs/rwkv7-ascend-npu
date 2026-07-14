@@ -4,7 +4,9 @@ import torch.nn.functional as F
 
 from perf.rwkv7_pth_engine import (
     make_folded_mix_project_weight,
+    normalize_loader_profile,
     pack_lowrank_layer,
+    unique_tensor_bytes,
 )
 
 
@@ -72,3 +74,19 @@ def test_lowrank_pack_rejects_incompatible_shapes():
 
     with pytest.raises(ValueError, match="incompatible shapes"):
         pack_lowrank_layer(first, second, biases)
+
+
+@pytest.mark.parametrize("profile", ["full", "prefill_only"])
+def test_supported_loader_profiles_are_stable(profile):
+    assert normalize_loader_profile(profile) == profile
+
+
+def test_unknown_loader_profile_is_rejected_before_checkpoint_loading():
+    with pytest.raises(ValueError, match="unsupported loader profile"):
+        normalize_loader_profile("quantized_magic")
+
+
+def test_unique_tensor_bytes_deduplicates_shared_storage():
+    tensor = torch.zeros(8, dtype=torch.float16)
+
+    assert unique_tensor_bytes((tensor, [tensor])) == 16

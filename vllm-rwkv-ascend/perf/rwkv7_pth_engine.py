@@ -15,6 +15,47 @@ import torch
 import torch.nn.functional as F
 
 
+LOADER_PROFILES = ("full", "prefill_only")
+
+
+def normalize_loader_profile(profile: str) -> str:
+    """Validate the model materialization contract used by a benchmark."""
+    if profile not in LOADER_PROFILES:
+        raise ValueError(
+            f"unsupported loader profile {profile!r}; expected one of "
+            + ", ".join(LOADER_PROFILES)
+        )
+    return profile
+
+
+def unique_tensor_bytes(value) -> int:
+    """Count unique tensor storage bytes in nested list/tuple structures."""
+    tensors = []
+    if isinstance(value, torch.Tensor):
+        tensors.append(value)
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            tensors.extend(_iter_tensors(item))
+    seen = set()
+    total = 0
+    for tensor in tensors:
+        if tensor.numel() == 0:
+            continue
+        storage_key = (tensor.device.type, tensor.untyped_storage().data_ptr())
+        if storage_key not in seen:
+            seen.add(storage_key)
+            total += tensor.untyped_storage().nbytes()
+    return total
+
+
+def _iter_tensors(value):
+    if isinstance(value, torch.Tensor):
+        yield value
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            yield from _iter_tensors(item)
+
+
 def _pad_output_features(weight: torch.Tensor, target: int) -> torch.Tensor:
     """Pad an ``[out, in]`` linear weight to ``target`` output features."""
     if weight.dim() != 2 or weight.shape[0] > target:
@@ -125,10 +166,14 @@ def build_blinkdl_engine(
     device: str,
     head_size: int = 64,
     include_mix_project: bool = False,
+    loader_profile: str = "full",
     extension_name: str = "rwkv7_ascend_real_checkpoint",
     extra_cflags: Sequence[str] | None = None,
 ):
     """Build the existing fused-engine namespace from a BlinkDL checkpoint."""
+    loader_profile = normalize_loader_profile(loader_profile)
+    if loader_profile == "prefill_only" and include_mix_project:
+        raise ValueError("prefill_only does not materialize mix-project weights")
     if not os.path.isfile(model_path):
         raise FileNotFoundError(model_path)
     raw = _load_checkpoint(model_path)
@@ -149,14 +194,17 @@ def build_blinkdl_engine(
     vocab_size = int(raw["emb.weight"].shape[0])
     dtype = torch.float16
 
-    from torch.utils.cpp_extension import load
+    if loader_profile == "full":
+        from torch.utils.cpp_extension import load
 
-    mod = load(
-        name=extension_name,
-        sources=[cpp_source],
-        verbose=False,
-        extra_cflags=list(extra_cflags or ("-O3", "-std=c++17")),
-    )
+        mod = load(
+            name=extension_name,
+            sources=[cpp_source],
+            verbose=False,
+            extra_cflags=list(extra_cflags or ("-O3", "-std=c++17")),
+        )
+    else:
+        mod = None
 
     def move(key: str, *, transpose: bool = False) -> torch.Tensor:
         if key not in raw:
@@ -229,10 +277,15 @@ def build_blinkdl_engine(
     pnw = [pre_weight] + [ones] * (layers - 1)
     pnb = [pre_bias] + [zeros] * (layers - 1)
 
-    rkv_bmm = [
-        torch.stack((rw[layer].t(), kw[layer].t(), vw[layer].t())).contiguous()
-        for layer in range(layers)
-    ]
+    if loader_profile == "full":
+        rkv_bmm = [
+            torch.stack((rw[layer].t(), kw[layer].t(), vw[layer].t())).contiguous()
+            for layer in range(layers)
+        ]
+    else:
+        rkv_bmm = [
+            torch.empty(0, device=device, dtype=dtype) for _ in range(layers)
+        ]
     lowrank_first = []
     lowrank_second = []
     lowrank_bias = []
@@ -264,15 +317,30 @@ def build_blinkdl_engine(
             # of MiB folded-weight cost when that experiment is disabled.
             mix_project.append(torch.empty(0, device=device, dtype=dtype))
 
+    if loader_profile == "prefill_only":
+        # The layer-major prefill path consumes only the packed low-rank chains.
+        # Drop the eleven raw chain groups before returning so large checkpoints
+        # do not retain both representations.  R/K/V stay resident because the
+        # prefill projection path consumes them directly.
+        del w0, w2, a0, a2, g0, g2, v0, v2, w2b, a2b, v2b
+        unused = [
+            torch.empty(0, device=device, dtype=dtype) for _ in range(layers)
+        ]
+        raw_lowrank_groups = (unused,) * 11
+    else:
+        raw_lowrank_groups = (
+            w0, w2, a0, a2, g0, g2, v0, v2, w2b, a2b, v2b,
+        )
+
     eng = types.SimpleNamespace()
     eng.L, eng.H, eng.N, eng.hidden = layers, heads, head_size, hidden
     eng.vocab_size = vocab_size
     eng.model_path = model_path
+    eng.loader_profile = loader_profile
     eng.mod = mod
     eng.W = (
         rw, kw, vw, rkv_bmm, ow, fkw, fvw,
-        w0, w2, a0, a2, g0, g2, v0, v2,
-        w2b, a2b, v2b,
+        *raw_lowrank_groups,
         xr, xw, xk, xv, xa, xg,
         kk, ka, rk, gnw, gnb, fxk,
         anw, anb, fnw, fnb, pnw, pnb,
@@ -283,5 +351,17 @@ def build_blinkdl_engine(
     eng.lm_w_m = move("head.weight")
     eng.fnorm_w = move("ln_out.weight").reshape(-1)
     eng.fnorm_b = move("ln_out.bias").reshape(-1)
+    eng.packed_tensor_bytes = unique_tensor_bytes(
+        (eng.W[3], eng.W[36], eng.W[37], eng.W[38], eng.W[39])
+    )
+    eng.resident_tensor_bytes = unique_tensor_bytes(
+        (
+            eng.W,
+            eng.base.embeddings.weight,
+            eng.lm_w_m,
+            eng.fnorm_w,
+            eng.fnorm_b,
+        )
+    )
     del raw
     return eng
