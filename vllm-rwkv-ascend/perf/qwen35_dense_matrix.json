@@ -1,0 +1,113 @@
+{
+  "schema_version": 1,
+  "matrix_id": "rwkv7-vs-qwen35-dense",
+  "scope": "text-language-model",
+  "sources": {
+    "rwkv": "https://huggingface.co/BlinkDL/rwkv7-g1",
+    "qwen": "https://huggingface.co/collections/Qwen/qwen35"
+  },
+  "precisions": ["fp16"],
+  "workloads": [
+    {"batch_size": 1, "prompt_length": 512, "decode_length": 128},
+    {"batch_size": 4, "prompt_length": 512, "decode_length": 128},
+    {"batch_size": 1, "prompt_length": 2048, "decode_length": 128},
+    {"batch_size": 4, "prompt_length": 2048, "decode_length": 128}
+  ],
+  "tiers": [
+    {
+      "tier_id": "dense-0",
+      "rwkv": {
+        "model_key": "rwkv7-0.4b",
+        "official_model_id": "BlinkDL/rwkv7-g1",
+        "checkpoint_glob": "*0.4b*.pth",
+        "parameters_billions": 0.4,
+        "layers": 24,
+        "hidden_size": 1024,
+        "head_size": 64,
+        "minimum_fp16_devices": 1
+      },
+      "qwen": {
+        "model_key": "qwen3.5-0.8b",
+        "official_model_id": "Qwen/Qwen3.5-0.8B",
+        "parameters_billions": 0.8,
+        "minimum_fp16_devices": 1
+      }
+    },
+    {
+      "tier_id": "dense-1",
+      "rwkv": {
+        "model_key": "rwkv7-1.5b",
+        "official_model_id": "BlinkDL/rwkv7-g1",
+        "checkpoint_glob": "*1.5b*.pth",
+        "parameters_billions": 1.5,
+        "layers": 24,
+        "hidden_size": 2048,
+        "head_size": 64,
+        "minimum_fp16_devices": 1
+      },
+      "qwen": {
+        "model_key": "qwen3.5-2b",
+        "official_model_id": "Qwen/Qwen3.5-2B",
+        "parameters_billions": 2.0,
+        "minimum_fp16_devices": 1
+      }
+    },
+    {
+      "tier_id": "dense-2",
+      "rwkv": {
+        "model_key": "rwkv7-2.9b",
+        "official_model_id": "BlinkDL/rwkv7-g1",
+        "checkpoint_glob": "*2.9b*.pth",
+        "parameters_billions": 2.9,
+        "layers": 32,
+        "hidden_size": 2560,
+        "head_size": 64,
+        "minimum_fp16_devices": 1
+      },
+      "qwen": {
+        "model_key": "qwen3.5-4b",
+        "official_model_id": "Qwen/Qwen3.5-4B",
+        "parameters_billions": 4.0,
+        "minimum_fp16_devices": 1
+      }
+    },
+    {
+      "tier_id": "dense-3",
+      "rwkv": {
+        "model_key": "rwkv7-7.2b",
+        "official_model_id": "BlinkDL/rwkv7-g1",
+        "checkpoint_glob": "*7.2b*.pth",
+        "parameters_billions": 7.2,
+        "layers": 32,
+        "hidden_size": 4096,
+        "head_size": 64,
+        "minimum_fp16_devices": 1
+      },
+      "qwen": {
+        "model_key": "qwen3.5-9b",
+        "official_model_id": "Qwen/Qwen3.5-9B",
+        "parameters_billions": 9.0,
+        "minimum_fp16_devices": 1
+      }
+    },
+    {
+      "tier_id": "dense-4",
+      "rwkv": {
+        "model_key": "rwkv7-13.3b",
+        "official_model_id": "BlinkDL/rwkv7-g1",
+        "checkpoint_glob": "*13.3b*.pth",
+        "parameters_billions": 13.3,
+        "layers": 61,
+        "hidden_size": 4096,
+        "head_size": 64,
+        "minimum_fp16_devices": 1
+      },
+      "qwen": {
+        "model_key": "qwen3.5-27b",
+        "official_model_id": "Qwen/Qwen3.5-27B",
+        "parameters_billions": 27.0,
+        "minimum_fp16_devices": 2
+      }
+    }
+  ]
+}

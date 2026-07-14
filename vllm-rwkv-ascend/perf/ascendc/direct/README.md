@@ -1,9 +1,10 @@
 # Direct AscendC decode kernels
 
-This directory contains the opt-in B=1 fused backend used by
-`perf/bench_graph_overhead.py`. The normal `rwkv7_decode_full` Python call
-contract remains available; packed direct weights are selected only by the
-benchmark flags below.
+This directory contains the opt-in B=1 decode backend used by
+`perf/bench_graph_overhead.py` and the batched N=64 prefill scan used by
+`perf/bench_rwkv7_pth_prefill.py`. The normal `rwkv7_decode_full` Python call
+contract remains available; packed direct weights and the prefill scan are
+selected only by explicit benchmark flags.
 
 ## Build
 
@@ -20,6 +21,33 @@ cmake -S perf/ascendc/direct -B /tmp/rwkv7_direct/build \
   -DGLIBCXX_USE_CXX11_ABI=1
 cmake --build /tmp/rwkv7_direct/build -j
 ```
+
+Run the real BlinkDL-checkpoint prefill row with:
+
+```bash
+RWKV7_ASCENDC_DIRECT_BUILD_DIR=/tmp/rwkv7_direct/build \
+taskset -c 31 python perf/bench_rwkv7_pth_prefill.py \
+  --model-pth /path/to/RWKV-x070-World-0.4B-v2.9-20250107-ctx4096.pth \
+  --device npu:0 --batch-size 1 --prompt-length 512 \
+  --correctness-length 64 --ascendc-scan --warmup 3 --iterations 10 \
+  --output results/rwkv7-0.4b-b1-p512-ascendc.json
+```
+
+On the validated 910B2C, the B1/P512 median is `69.770 ms` or `7338.37
+tok/s`, with greedy match, logits cosine `0.999999642`, and `1160.65 MiB`
+peak allocated memory. The scan keeps fp32 state-row tiles in UB across the
+complete prompt and streams fp16 token vectors; projections remain on the
+vendor batched-matmul path. The former PyTorch recurrent scan took about
+`1995.06 ms` for the same shape.
+
+The B4/P512 row is `192.806 ms` or `10622.06 tok/s`, with greedy match,
+minimum logits cosine `0.999999881`, and `1344.81 MiB` peak allocated memory.
+This is a correctness-passing batch implementation, but it is not yet the
+performance winner: official vLLM-Ascend strict eager measures `20886.71
+tok/s` for Qwen3.5-0.8B on the same card and workload. Scan-only probing shows
+the recurrent kernel dominates B4; the one- and four-row-block variants and
+local-state ping-pong all regressed and are excluded. The next B4 step is
+compact-WY/Cube prefill, not wrapper fusion.
 
 Run the current target row with:
 
@@ -61,6 +89,9 @@ layers are `8.720-10.040 us` each.
 ## Current specialization
 
 - B=1 decode, fp16 activations and fp32 recurrent state.
+- Batched prefill scan for N=64, fp16 vectors, and fp32 recurrent state. It
+  uses two row blocks per head on the validated 910B2C; a one-block B4 probe
+  was slower because the larger per-block row loop outweighed fewer waves.
 - The performance row is tuned for `H=12`, `N=64`, 12 layers on 910B2C.
 - Two row blocks per head occupy the card's 24 Vector Cores. Larger row-block
   counts are intentionally rejected because this launch does not execute a

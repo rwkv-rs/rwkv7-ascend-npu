@@ -1,0 +1,275 @@
+{
+  "matrix_id": "rwkv7-vs-qwen35-dense",
+  "global_status": "fail",
+  "normalized_result_count": 16,
+  "rows": [
+    {
+      "tier_id": "dense-0",
+      "batch_size": 1,
+      "prompt_length": 512,
+      "decode_length": 128,
+      "dtype": "fp16",
+      "status": "pass",
+      "reasons": [],
+      "prefill_ratio": 1.6308058704812916,
+      "decode_ratio": 2.251217271484222,
+      "memory_ratio": 0.04697830492707399
+    },
+    {
+      "tier_id": "dense-0",
+      "batch_size": 4,
+      "prompt_length": 512,
+      "decode_length": 128,
+      "dtype": "fp16",
+      "status": "pass",
+      "reasons": [],
+      "prefill_ratio": 1.711888918992501,
+      "decode_ratio": 1.900697026167134,
+      "memory_ratio": 0.0586889485725654
+    },
+    {
+      "tier_id": "dense-0",
+      "batch_size": 1,
+      "prompt_length": 2048,
+      "decode_length": 128,
+      "dtype": "fp16",
+      "status": "pass",
+      "reasons": [],
+      "prefill_ratio": 1.0737983488647538,
+      "decode_ratio": 2.289903675671302,
+      "memory_ratio": 0.05633056098611618
+    },
+    {
+      "tier_id": "dense-0",
+      "batch_size": 4,
+      "prompt_length": 2048,
+      "decode_length": 128,
+      "dtype": "fp16",
+      "status": "pass",
+      "reasons": [],
+      "prefill_ratio": 1.0182874592875568,
+      "decode_ratio": 1.9200628379361633,
+      "memory_ratio": 0.09614188945973363
+    },
+    {
+      "tier_id": "dense-1",
+      "batch_size": 1,
+      "prompt_length": 512,
+      "decode_length": 128,
+      "dtype": "fp16",
+      "status": "pass",
+      "reasons": [],
+      "prefill_ratio": 1.235339995485193,
+      "decode_ratio": 1.6742115554306467,
+      "memory_ratio": 0.14819800114412626
+    },
+    {
+      "tier_id": "dense-1",
+      "batch_size": 4,
+      "prompt_length": 512,
+      "decode_length": 128,
+      "dtype": "fp16",
+      "status": "pass",
+      "reasons": [],
+      "prefill_ratio": 1.1551530991568535,
+      "decode_ratio": 1.5273952602368226,
+      "memory_ratio": 0.17187762366927495
+    },
+    {
+      "tier_id": "dense-1",
+      "batch_size": 1,
+      "prompt_length": 2048,
+      "decode_length": 128,
+      "dtype": "fp16",
+      "status": "fail",
+      "reasons": [
+        "RWKV prefill is not faster"
+      ],
+      "prefill_ratio": 0.8310436261737721,
+      "decode_ratio": 1.6467232679641903,
+      "memory_ratio": 0.16735419391622228
+    },
+    {
+      "tier_id": "dense-1",
+      "batch_size": 4,
+      "prompt_length": 2048,
+      "decode_length": 128,
+      "dtype": "fp16",
+      "status": "fail",
+      "reasons": [
+        "RWKV prefill is not faster"
+      ],
+      "prefill_ratio": 0.6437559430154456,
+      "decode_ratio": 1.5321064618167621,
+      "memory_ratio": 0.25247213678605684
+    },
+    {
+      "tier_id": "dense-2",
+      "batch_size": 1,
+      "prompt_length": 512,
+      "decode_length": 128,
+      "dtype": "fp16",
+      "status": "missing",
+      "reasons": [
+        "paired result is missing"
+      ],
+      "prefill_ratio": null,
+      "decode_ratio": null,
+      "memory_ratio": null
+    },
+    {
+      "tier_id": "dense-2",
+      "batch_size": 4,
+      "prompt_length": 512,
+      "decode_length": 128,
+      "dtype": "fp16",
+      "status": "missing",
+      "reasons": [
+        "paired result is missing"
+      ],
+      "prefill_ratio": null,
+      "decode_ratio": null,
+      "memory_ratio": null
+    },
+    {
+      "tier_id": "dense-2",
+      "batch_size": 1,
+      "prompt_length": 2048,
+      "decode_length": 128,
+      "dtype": "fp16",
+      "status": "missing",
+      "reasons": [
+        "paired result is missing"
+      ],
+      "prefill_ratio": null,
+      "decode_ratio": null,
+      "memory_ratio": null
+    },
+    {
+      "tier_id": "dense-2",
+      "batch_size": 4,
+      "prompt_length": 2048,
+      "decode_length": 128,
+      "dtype": "fp16",
+      "status": "missing",
+      "reasons": [
+        "paired result is missing"
+      ],
+      "prefill_ratio": null,
+      "decode_ratio": null,
+      "memory_ratio": null
+    },
+    {
+      "tier_id": "dense-3",
+      "batch_size": 1,
+      "prompt_length": 512,
+      "decode_length": 128,
+      "dtype": "fp16",
+      "status": "missing",
+      "reasons": [
+        "paired result is missing"
+      ],
+      "prefill_ratio": null,
+      "decode_ratio": null,
+      "memory_ratio": null
+    },
+    {
+      "tier_id": "dense-3",
+      "batch_size": 4,
+      "prompt_length": 512,
+      "decode_length": 128,
+      "dtype": "fp16",
+      "status": "missing",
+      "reasons": [
+        "paired result is missing"
+      ],
+      "prefill_ratio": null,
+      "decode_ratio": null,
+      "memory_ratio": null
+    },
+    {
+      "tier_id": "dense-3",
+      "batch_size": 1,
+      "prompt_length": 2048,
+      "decode_length": 128,
+      "dtype": "fp16",
+      "status": "missing",
+      "reasons": [
+        "paired result is missing"
+      ],
+      "prefill_ratio": null,
+      "decode_ratio": null,
+      "memory_ratio": null
+    },
+    {
+      "tier_id": "dense-3",
+      "batch_size": 4,
+      "prompt_length": 2048,
+      "decode_length": 128,
+      "dtype": "fp16",
+      "status": "missing",
+      "reasons": [
+        "paired result is missing"
+      ],
+      "prefill_ratio": null,
+      "decode_ratio": null,
+      "memory_ratio": null
+    },
+    {
+      "tier_id": "dense-4",
+      "batch_size": 1,
+      "prompt_length": 512,
+      "decode_length": 128,
+      "dtype": "fp16",
+      "status": "missing",
+      "reasons": [
+        "paired result is missing"
+      ],
+      "prefill_ratio": null,
+      "decode_ratio": null,
+      "memory_ratio": null
+    },
+    {
+      "tier_id": "dense-4",
+      "batch_size": 4,
+      "prompt_length": 512,
+      "decode_length": 128,
+      "dtype": "fp16",
+      "status": "missing",
+      "reasons": [
+        "paired result is missing"
+      ],
+      "prefill_ratio": null,
+      "decode_ratio": null,
+      "memory_ratio": null
+    },
+    {
+      "tier_id": "dense-4",
+      "batch_size": 1,
+      "prompt_length": 2048,
+      "decode_length": 128,
+      "dtype": "fp16",
+      "status": "missing",
+      "reasons": [
+        "paired result is missing"
+      ],
+      "prefill_ratio": null,
+      "decode_ratio": null,
+      "memory_ratio": null
+    },
+    {
+      "tier_id": "dense-4",
+      "batch_size": 4,
+      "prompt_length": 2048,
+      "decode_length": 128,
+      "dtype": "fp16",
+      "status": "missing",
+      "reasons": [
+        "paired result is missing"
+      ],
+      "prefill_ratio": null,
+      "decode_ratio": null,
+      "memory_ratio": null
+    }
+  ]
+}

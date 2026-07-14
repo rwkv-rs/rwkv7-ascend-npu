@@ -19,7 +19,7 @@ jobs:
           pip install -q torch --index-url https://download.pytorch.org/whl/cpu
           pip install -q pytest
       - name: vllm-rwkv-ascend (sampler unit + cpp-forward writeback fix)
-        run: cd vllm-rwkv-ascend && PYTHONPATH=serving python -m pytest tests/test_sampler.py tests/test_cpp_forward.py tests/test_graph_greedy_scheduler.py -v
+        run: cd vllm-rwkv-ascend && PYTHONPATH=serving:. python -m pytest tests/test_sampler.py tests/test_cpp_forward.py tests/test_graph_greedy_scheduler.py tests/test_pth_engine.py -v
       - name: rwkv7-sglang-ascend (WKV recurrence vs reference)
         run: cd rwkv7-sglang-ascend && PYTHONPATH=. python -m pytest tests/test_wkv_unit.py -v
       - name: ascend-optimized (AscendC op-defs + cpp-forward structure)
