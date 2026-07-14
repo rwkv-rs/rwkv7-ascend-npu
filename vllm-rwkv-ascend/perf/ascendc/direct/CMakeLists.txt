@@ -45,6 +45,8 @@ ascendc_library(
   rwkv7_recurrence_prep_kernel STATIC kernel/rwkv_recurrence_prep.cpp)
 ascendc_library(
   rwkv7_recurrence_state_kernel STATIC kernel/rwkv_recurrence_state.cpp)
+ascendc_library(
+  rwkv7_prefill_scan_kernel STATIC kernel/rwkv_prefill_scan.cpp)
 ascendc_library(rwkv7_ffn_prep_kernel STATIC kernel/rwkv_ffn_prep.cpp)
 ascendc_library(rwkv7_attn_prep_kernel STATIC kernel/rwkv_attn_prep.cpp)
 ascendc_library(rwkv7_embedding_kernel STATIC kernel/rwkv_embedding.cpp)
@@ -77,6 +79,7 @@ target_link_libraries(rwkv7_ascend_direct PRIVATE
   rwkv7_lowrank_post_kernel
   rwkv7_recurrence_prep_kernel
   rwkv7_recurrence_state_kernel
+  rwkv7_prefill_scan_kernel
   rwkv7_ffn_prep_kernel
   rwkv7_attn_prep_kernel
   rwkv7_embedding_kernel

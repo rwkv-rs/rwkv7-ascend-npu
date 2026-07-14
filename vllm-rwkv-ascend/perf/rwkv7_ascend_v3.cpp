@@ -59,6 +59,11 @@
 #include "aclrtlaunch_rwkv_add_layer_norm_direct.h"
 #include "aclrtlaunch_rwkv_concat2_direct.h"
 #endif
+#ifdef RWKV7_USE_PREFILL_SCAN
+#include "torch_npu/csrc/core/npu/NPUStream.h"
+#include "torch_npu/csrc/framework/OpCommand.h"
+#include "aclrtlaunch_rwkv_prefill_scan_direct.h"
+#endif
 
 static const float EXP_HALF = 0.606531f;
 static const double LN_EPS = 1e-5;
@@ -144,6 +149,66 @@ static std::vector<at::Tensor> rwkv7_ascendc_shift_mix2(
                 static_cast<int>(run_status));
     if (workspace != nullptr) aclrtFree(workspace);
     return {y1, y2};
+}
+#endif
+
+#ifdef RWKV7_USE_PREFILL_SCAN
+static std::vector<at::Tensor> rwkv7_ascendc_prefill_scan_direct(
+        const at::Tensor& state,
+        const at::Tensor& w,
+        const at::Tensor& k,
+        const at::Tensor& v,
+        const at::Tensor& kk,
+        const at::Tensor& a,
+        const at::Tensor& r,
+        int64_t heads,
+        int64_t head_size) {
+    TORCH_CHECK(head_size == 64, "prefill scan requires N=64");
+    TORCH_CHECK(
+        state.scalar_type() == at::kFloat,
+        "prefill scan requires fp32 [B,H,N,N] state");
+    TORCH_CHECK(
+        w.scalar_type() == at::kHalf && (w.dim() == 2 || w.dim() == 3) &&
+            w.size(-1) == heads * head_size,
+        "prefill scan requires fp16 [T,H*N] or [B,T,H*N] vectors");
+    TORCH_CHECK(
+        k.sizes() == w.sizes() && v.sizes() == w.sizes() &&
+            kk.sizes() == w.sizes() && a.sizes() == w.sizes() &&
+            r.sizes() == w.sizes(),
+        "prefill scan vector shapes must match");
+    auto output = at::empty_like(r);
+    auto stream = c10_npu::getCurrentNPUStream().stream(false);
+    const int64_t batch_size = w.dim() == 3 ? w.size(0) : 1;
+    const int64_t token_count = w.dim() == 3 ? w.size(1) : w.size(0);
+    constexpr uint32_t row_blocks = 2;
+    TORCH_CHECK(
+        state.numel() == batch_size * heads * head_size * head_size,
+        "prefill scan state batch does not match vector batch");
+    const uint32_t block_dim =
+        static_cast<uint32_t>(batch_size * heads) * row_blocks;
+    const uint32_t tokens = static_cast<uint32_t>(token_count);
+    const uint32_t hidden = static_cast<uint32_t>(w.size(-1));
+    const uint32_t n = static_cast<uint32_t>(head_size);
+    std::array<void*, 8> pointers = {
+        const_cast<void*>(state.data_ptr()),
+        const_cast<void*>(w.data_ptr()),
+        const_cast<void*>(k.data_ptr()),
+        const_cast<void*>(v.data_ptr()),
+        const_cast<void*>(kk.data_ptr()),
+        const_cast<void*>(a.data_ptr()),
+        const_cast<void*>(r.data_ptr()),
+        const_cast<void*>(output.data_ptr())};
+    auto launch = [
+        stream, block_dim, pointers, tokens, hidden, row_blocks, n]() -> int {
+        ACLRT_LAUNCH_KERNEL(rwkv_prefill_scan_direct)(
+            block_dim, stream, pointers[0], pointers[1], pointers[2],
+            pointers[3], pointers[4], pointers[5], pointers[6], pointers[7],
+            tokens, hidden, row_blocks, n);
+        return 0;
+    };
+    at_npu::native::OpCommand::RunOpApi(
+        "rwkv_prefill_scan_direct", launch);
+    return {output, state};
 }
 #endif
 
@@ -960,6 +1025,14 @@ static at::Tensor rwkv7_ascendc_embedding_norm2_direct(
 #define RWKV7_W_EXP(x) (x)
 #define RWKV7_VM_SIGMOID(x) (x)
 #elif defined(RWKV7_USE_LOWRANK_BMM)
+#ifdef RWKV7_USE_RECURRENCE_PREP
+#define RWKV7_LOWRANK_PROJECTIONS( \
+        li, xw, xa, xg, xv, w0, w2, w2b, a0, a2, a2b, g0, g2, \
+        v0, v2, v2b, lr1_weight, lr2_weight, lr_bias) \
+    auto _lr1 = at::bmm((_sm6[7]).narrow(0, 3, 4), (lr1_weight)); \
+    auto _lr1_activated = rwkv7_ascendc_lowrank_activate_direct(_lr1); \
+    auto _lr2 = at::bmm(_lr1_activated, (lr2_weight));
+#else
 #define RWKV7_LOWRANK_PROJECTIONS( \
         li, xw, xa, xg, xv, w0, w2, w2b, a0, a2, a2b, g0, g2, \
         v0, v2, v2b, lr1_weight, lr2_weight, lr_bias) \
@@ -971,6 +1044,7 @@ static at::Tensor rwkv7_ascendc_embedding_norm2_direct(
     auto a_raw = _lr_post[1]; \
     auto g_sig = _lr_post[2]; \
     auto vm_raw = _lr_post[3];
+#endif
 #define RWKV7_W_EXP(x) (x)
 #define RWKV7_VM_SIGMOID(x) (x)
 #else
@@ -1603,5 +1677,10 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         "rwkv7_embedding_norm2", &rwkv7_ascendc_embedding_norm2_direct,
         "B=1 fused embedding and two layer norms");
 #endif
+#endif
+#ifdef RWKV7_USE_PREFILL_SCAN
+    m.def(
+        "rwkv7_prefill_scan", &rwkv7_ascendc_prefill_scan_direct,
+        "batched layer-major fused recurrent prefill scan");
 #endif
 }

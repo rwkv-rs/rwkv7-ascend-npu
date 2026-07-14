@@ -1,9 +1,11 @@
 """Measure graph-external overhead for the production B=1 decode path.
 
-This benchmark intentionally uses shape-correct synthetic weights so it can run
-on a bare torch_npu image without downloading a checkpoint or installing
-Transformers.  It separates the captured RWKV-7 forward from the embedding
-update and scheduler-state copies performed by :class:`NpuGraphDecoder`.
+By default this benchmark uses shape-correct synthetic weights so it can run on
+a bare torch_npu image without downloading a checkpoint or installing
+Transformers.  ``--model-pth`` instead loads an official BlinkDL checkpoint for
+an end-to-end, numerically meaningful decode comparison.  It separates the
+captured RWKV-7 forward from the embedding update and scheduler-state copies
+performed by :class:`NpuGraphDecoder`.
 
 Example (0.1B shape on a 910B3)::
 
@@ -28,6 +30,7 @@ SERVING = os.path.join(os.path.dirname(HERE), "serving")
 sys.path.insert(0, SERVING)
 
 from graph_decode import NpuGraphDecoder  # noqa: E402
+from rwkv7_pth_engine import build_blinkdl_engine  # noqa: E402
 
 
 def _cann_lib_dir(cann_home: str) -> str:
@@ -295,6 +298,10 @@ def main() -> None:
     parser.add_argument("--heads", type=int, default=12)
     parser.add_argument("--head-size", type=int, default=64)
     parser.add_argument("--vocab-size", type=int, default=65536)
+    parser.add_argument(
+        "--model-pth",
+        help="load an official BlinkDL RWKV-7 checkpoint instead of synthetic weights",
+    )
     parser.add_argument("--warmup", type=int, default=10)
     parser.add_argument("--iterations", type=int, default=100)
     parser.add_argument(
@@ -423,8 +430,13 @@ def main() -> None:
             "--direct-mix-project requires --direct-dplr-state, "
             "--direct-rkv-bmm, --direct-lowrank-bmm, and --direct-fractal-nz"
         )
-    if args.direct_recurrence_prep and not args.direct_mix_project:
-        parser.error("--direct-recurrence-prep requires --direct-mix-project")
+    if args.direct_recurrence_prep and not (
+        args.direct_mix_project or args.direct_lowrank_bmm
+    ):
+        parser.error(
+            "--direct-recurrence-prep requires --direct-mix-project or "
+            "--direct-lowrank-bmm"
+        )
     if args.direct_fused_recurrence_state and not (
         args.direct_recurrence_prep
         and args.direct_dplr_state
@@ -457,15 +469,28 @@ def main() -> None:
             "--direct-fused-embed-norm2 requires --direct-fused-next-attn"
         )
 
-    eng = build_synthetic_engine(
-        args.cpp_source,
-        device=args.device,
-        layers=args.layers,
-        heads=args.heads,
-        head_size=args.head_size,
-        vocab_size=args.vocab_size,
-    )
-    if (
+    if args.model_pth:
+        eng = build_blinkdl_engine(
+            args.cpp_source,
+            model_path=args.model_pth,
+            device=args.device,
+            head_size=args.head_size,
+            include_mix_project=args.direct_mix_project,
+        )
+        args.layers = eng.L
+        args.heads = eng.H
+        args.head_size = eng.N
+        args.vocab_size = eng.vocab_size
+    else:
+        eng = build_synthetic_engine(
+            args.cpp_source,
+            device=args.device,
+            layers=args.layers,
+            heads=args.heads,
+            head_size=args.head_size,
+            vocab_size=args.vocab_size,
+        )
+    if not args.model_pth and (
         args.compare_addcmul
         or args.compare_ascendc_shift_mix2
         or args.compare_foreach_shift_mix
@@ -1381,7 +1406,7 @@ def main() -> None:
         )
     print(
         "shape L=%d H=%d N=%d hidden=%d vocab=%d"
-        % (eng.L, eng.H, eng.N, eng.hidden, args.vocab_size),
+        % (eng.L, eng.H, eng.N, eng.hidden, eng.vocab_size),
         flush=True,
     )
     timings = {}
