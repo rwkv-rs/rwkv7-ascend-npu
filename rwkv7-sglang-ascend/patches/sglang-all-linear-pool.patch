@@ -1,0 +1,29 @@
+--- a/python/sglang/srt/model_executor/pool_configurator.py
++++ b/python/sglang/srt/model_executor/pool_configurator.py
+@@ -131,6 +131,14 @@
+             num_layers = kvc.layer_info.num_effective_layers
+ 
+         self._cell_size = self._compute_cell_size(kvc, num_layers)
++        # All-linear recurrent models have no token KV bytes.  The token pool is
++        # still required for scheduling/accounting, so cap it by the number of
++        # recurrent request slots times context length instead of dividing by 0.
++        self._all_linear_token_cap = None
++        if self._cell_size == 0 and mambaish_config(kvc.model_config) is not None:
++            self._all_linear_token_cap = (
++                kvc.server_args.max_mamba_cache_size * kvc.model_config.context_len
++            )
+ 
+         # EAGLE/STANDALONE: scale cell_size to account for draft model KV cache.
+         # Assumes draft and target share the same per-layer KV size (head_dim,
+@@ -287,7 +295,10 @@
+     def calculate_pool_sizes(
+         self, available_bytes: int, page_size: int
+     ) -> MemoryPoolConfig:
+-        max_total_num_tokens = available_bytes // self._cell_size
++        if self._all_linear_token_cap is not None:
++            max_total_num_tokens = self._all_linear_token_cap
++        else:
++            max_total_num_tokens = available_bytes // self._cell_size
+         max_total_num_tokens = max_total_num_tokens // page_size * page_size
+         return MemoryPoolConfig(max_total_num_tokens=max_total_num_tokens)
+ 

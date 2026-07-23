@@ -1,95 +1,102 @@
-# RWKV-7 SGLang — Ascend NPU port
+# RWKV-7 for SGLang on Ascend
 
-Production-grade serving of **RWKV-7** (Goose) on [SGLang](https://github.com/sgl-project/sglang)
-for **Huawei Ascend NPU** (Ascend 910B3, CANN 8.5.0). Correctness-gated, cuda-graph
-accelerated, fp32 + bf16, reproducible end-to-end.
+An installable, out-of-tree RWKV-7 recurrent backend for SGLang on Huawei
+Ascend. The production path no longer copies an overlay into `site-packages` or
+rewrites seven upstream files. It uses SGLang's public external-model and
+linear-attention registries, plus one auditable upstream patch for an all-linear
+KV-pool division-by-zero.
 
-## Status — production serving works on the 910B3
+## Scope and truthful status
 
-| | result |
-|---|---|
-| **Correctness gates** | WKV recurrence vs independent numpy oracle: worst **1.8e-6**; full RWKV-7 model greedy vs the numpy oracle: **20/20 token-exact** (0.1B BlinkDL `.pth`) |
-| **fp32 serving** | fla-hub/rwkv7-0.4b-world, decode cuda graph, **~102 tok/s** bs=1, correct greedy ("Eiffel Tower… → Paris, France…") |
-| **bf16 serving** | same model, **0.91 GB** (half of fp32), cuda graph, greedy identical to fp32 |
-| **Scaling** | fla-hub/rwkv7-1.5b-world loads + serves (6 GB model + 19 GB state pool, cuda graph) |
-| **Spec-decode** | chain worker deployed + registered + constructs + target verify graph capture (K=4) runs — see [SPEC_DECODE.md](SPEC_DECODE.md) |
+Implemented and CPU/unit gated:
 
-Greedy output is verified coherent and matches the numpy reference, e.g.
-`"The Eiffel Tower is located in the city of"` →
-`" Paris, France. It is a symbol of the city and is one of the most recognizable structures in the world. The"`.
+- standard HF `config.json`, tokenizer and safetensors consumed by SGLang;
+- SGLang `MambaPool` recurrent state: two token shifts plus fp32 WKV state;
+- continuous/dynamic batching through physical request slots;
+- packed variable-length prefill and arbitrary chunk continuation;
+- cancellation/slot clearing, copy/reorder, CPU offload and restore adapter;
+- decode graph-safe fixed-shape metadata through `AscendMambaAttnBackendBase`;
+- fp32 recurrent math with bf16/fp16 model activations;
+- independent recurrence oracle and chunk/slot lifecycle tests.
 
-## Reproduce (on a 910B3 box, CANN 8.5.0 + ATB already installed)
+Not claimed by this branch without a dated hardware artifact:
 
-```bash
-# 1. Ascend env (fresh py3.11 venv): torch + torch_npu matched to CANN 8.5.0.
-bash scripts/bootstrap_ascend_env.sh         # /data/rwkv7-sglang-venv  (torch 2.7.1, for the correctness gates)
+- W8/W4 end-to-end model speed or memory acceptance;
+- tensor/pipeline parallel correctness;
+- radix-prefix state snapshots;
+- speculative decoding;
+- long-running concurrency throughput.
 
-# 2. Build + install SGLang (NPU build), then pin the NPU-matched deps.
-bash scripts/install_sglang_ascend.sh         # sgl-kernel-npu from source + sglang[all_npu]
-bash scripts/resume_sglang_build.sh           # (if the build's python/deps need the documented fixes)
+`versions.env` is the only supported source/ABI matrix. Current pins:
+SGLang `d0b9689`, sgl-kernel-npu `d661747`, torch/torch_npu 2.9.0,
+Transformers 5.12.1, CANN 8.5.0.
 
-# 3. Deploy the RWKV-7 integration into the sglang tree + serve (fp32, cuda graph).
-bash scripts/deploy_ascend.sh                 # overlay + wiring + cann stub + dep-pin
-bash scripts/serve_ascend.sh /data/rwkv7-models/rwkv7-0.4b-world-fla   # POST /generate
+## Layout
+
+```text
+sglang_rwkv7_ascend/
+  configuration_rwkv7.py  HF config + exact MambaPool state shape
+  backend.py               Ascend recurrent backend + all-linear no-op backend
+  models/rwkv7.py          SGLang model and HF safetensors loader
+  kernels/wkv.py           correctness-first torch recurrence
+  state_cache.py           copy/reorder/offload/restore state contract
+patches/
+  sglang-all-linear-pool.patch
+scripts/
+  install_production.sh
+  verify_install.py
+  serve_production.sh
 ```
 
-For **bf16** (half memory): use the torch_npu-2.9.0 venv instead —
-`scripts/test_torch_npu_29_bf16.sh` (venv-29), `rebuild_sgl_kernel_npu_29.sh`,
-`install_sglang_venv29.sh`, then `serve_ascend.sh … --dtype bfloat16` with the
-venv-29 python. (torch_npu 2.9.0 is still CANN-8.5.0-compatible and fixes the
-aclnn bf16 norm failure seen on 2.8.0.post2.)
+The old `ascend_port/sglang_overlay` and `deploy_wiring.py` remain only as
+historical evidence. Do not use them for new deployments.
 
-See [BENCH.md](BENCH.md) for the numbers and [SPEC_DECODE.md](SPEC_DECODE.md)
-for the speculative-decoding status.
+## Reproducible install
 
-## How it works
+The server must already contain these pinned checkouts:
 
-RWKV-7 is wired into SGLang as an **all-linear Mamba-family model**
-(`linear_layer_ids = all layers`, `full_attention_layer_ids = []`), reusing
-SGLang's hybrid-linear state plumbing:
+```text
+/data/work/sglang-upstream
+/data/work/sglang-upstream/third_party/sgl-kernel-npu
+/data/work/sglang-rwkv-ascend
+```
 
-- `ascend_port/wkv.py` — the DPLR delta-rule WKV recurrence in **pure torch**
-  (no Triton/CUDA), greedy-exact vs the numpy oracle. Decode (T=1), multistep,
-  and varlen-packed (`cu_seqlens`) modes; fp32 state, output cast to the input
-  dtype so bf16 serving doesn't leak fp32 into downstream norms.
-- `ascend_port/model.py` — full plain-torch RWKV-7 (faithful port of the numpy
-  oracle; the M1c gate).
-- `ascend_port/sglang_overlay/` — the SGLang integration: `Rwkv7Config`,
-  `Rwkv7AttnBackend` (subclasses `AscendMambaAttnBackendBase`; `recurrence()`
-  calls `wkv_recurrent` via gather/compute/scatter on the MambaPool), the model,
-  and the wiring. `scripts/deploy_wiring.py` applies the 7-file sglang edits
-  idempotently; `scripts/deploy_ascend.sh` is the one-shot deploy.
-- A `triton.language.extra.cann` stub unblocks imports (PyPI triton-ascend 3.2.0
-  is stripped; RWKV-7's pure-torch path never calls those kernels).
+Then:
 
-## Target hardware / stack
+```bash
+cd /data/work/sglang-rwkv-ascend/rwkv7-sglang-ascend
+bash scripts/install_production.sh
+```
 
-- NPU: Ascend 910B3 (64 GB HBM), CANN 8.5.0, ATB, aarch64 / openEuler
-- fp32: torch 2.8.0 + torch_npu 2.8.0.post2 + sgl-kernel-npu + sglang 0.5.14
-- bf16: torch 2.9.0 + torch_npu 2.9.0 (same CANN 8.5.0)
+The installer rejects commit skew, applies the small all-linear patch
+idempotently, builds `sgl-kernel-npu`, and installs into
+`/data/venvs/sglang`. It does not mutate the upstream SGLang pyproject or copy
+plugin files into the SGLang tree.
 
-## Known limitations / roadmap
+## Tests
 
-- **int8 quantization**: not yet — Hakureirm's quant paths are all CUDA
-  (hand-written int4/int8 GEMV, cutlass w8a8 sm80-90 only). Ascend needs a
-  from-scratch path (pure-torch w8a16 dequant-GEMV, or a CANN int8 matmul).
-- **spec-decode**: the chain worker runs (target verify graph K=4) but the full
-  launch hits v0.5.14 `BaseSpecWorker` interface skew (the worker targets
-  Hakureirm's sglang base `bd08540`); pin the sglang checkout to `bd08540` to
-  finish. Note: even Hakureirm's chain spec is eager 0.67× until the per-round
-  forwards are cuda-graphed.
-- **HCCL tensor parallel**: untested — this port was on a single NPU.
+No NPU reservation:
 
-## Origin & credit
+```bash
+/data/venvs/sglang/bin/python scripts/verify_install.py
+/data/venvs/sglang/bin/python -m pytest -q \
+  tests/test_wkv_unit.py tests/test_wkv_correctness.py \
+  tests/production/test_chunked_dynamic_state.py
+```
 
-The integration design — RWKV-7 as an all-linear Mamba-family model in SGLang,
-the custom linear-attention backend, the force-disabled token radix cache, the
-DPLR delta-rule WKV recurrence, and the chain speculative decoding — is ported
-from **[Hakureirm/rwkv-sglang](https://github.com/Hakureirm/rwkv-sglang)**
-(Apache-2.0). That project targets NVIDIA CUDA + Triton (+ Apple MLX); this repo
-reuses its NVIDIA-agnostic integration shape and rewrites the kernel path for
-Ascend / CANN. Reference snapshots live under `reference/hakureirm/`.
+Hardware smoke (only after unit gates):
 
-## License
+```bash
+/data/venvs/sglang/bin/python -m pytest -q tests/test_wkv_triton_vs_torch.py
+```
 
-Apache-2.0, matching the reference project. See [LICENSE](LICENSE).
+## Serve
+
+```bash
+bash scripts/serve_production.sh /data/models/rwkv7-hf \
+  --max-running-requests 32 --chunked-prefill-size 512
+```
+
+The wrapper registers `Rwkv7Config`, `RWKV7ForCausalLM`, the recurrent backend,
+and `rwkv7_ascend` before SGLang parses arguments. Radix prefix caching is
+deliberately off; active-request state caching and chunk continuation remain on.
