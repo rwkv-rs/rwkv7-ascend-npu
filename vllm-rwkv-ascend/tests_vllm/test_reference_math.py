@@ -56,3 +56,46 @@ def test_one_token_block_matches_canonical_hf_oracle():
     torch.testing.assert_close(got[2], new_att[0])
     torch.testing.assert_close(got[3], new_ffn[0])
     torch.testing.assert_close(got[4], new_v[0])
+
+
+def test_batched_token_recurrence_matches_independent_requests():
+    torch.manual_seed(321)
+    c = config()
+    mc = NS(dtype=torch.float32)
+    cc = NS(enable_prefix_caching=False)
+    block = RWKV7Block(c, mc, cc, 1, "model.layers.1")
+    for p in block.parameters():
+        p.data.normal_(0, 0.05)
+
+    batch = 4
+    x = torch.randn(batch, 8)
+    state = torch.randn(batch, 2, 4, 4, dtype=torch.float32)
+    att_prev = torch.randn(batch, 8)
+    ffn_prev = torch.randn(batch, 8)
+    v_first = torch.randn(batch, 8)
+
+    batched = block._token_recurrence(
+        x.clone(),
+        state.clone(),
+        att_prev.clone(),
+        ffn_prev.clone(),
+        v_first.clone(),
+    )
+    independent = [
+        block._token_recurrence(
+            x[row].clone(),
+            state[row].clone(),
+            att_prev[row].clone(),
+            ffn_prev[row].clone(),
+            v_first[row].clone(),
+        )
+        for row in range(batch)
+    ]
+    for component, batched_component in enumerate(batched):
+        expected = torch.stack([result[component] for result in independent])
+        torch.testing.assert_close(
+            batched_component,
+            expected,
+            rtol=1e-5,
+            atol=1e-6,
+        )

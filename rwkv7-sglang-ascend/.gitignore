@@ -5,6 +5,7 @@ __pycache__/
 .env
 .envrc
 *.log
+!evidence/rebuild/*.log
 results/
 bench/results/
 dist/

@@ -16,6 +16,9 @@ CANN 8.5.0, torch 2.9.0+cpu, torch_npu 2.9.0 and Transformers 4.57.6.
 | Ragged B2 compact/cache/chunked equivalence | pass |
 | Ragged B2 global logits/state minimum cosine | 0.99999988 / 0.99999970 |
 | Resident / peak allocated HBM in the oracle candidate capture | 14,433,095,680 / 14,485,243,392 bytes |
+| E2E `generate`, B1/B4/B8 aggregate output tok/s | 13.15 / 47.58 / 99.22 |
+| E2E dynamic-batch scaling B4/B1 / B8/B1 | 3.62× / 7.55× |
+| E2E exact greedy prefix and admission | `[45, 308, 459]` / pass |
 
 The independent reference capture hash is
 `35f24f1e0116fcbee548c69ee38652b897f14e6a09dedfad79753a0380e324f9`;
@@ -36,6 +39,7 @@ fails closed for a missing, changed, or incomplete tensor capture.
 2. `capture_ascend_hf_candidate.py`
 3. `compare_ascend_hf_reference.py`
 4. `smoke_ascend_hf_ragged_b2.py`
+5. `bench/run_e2e_performance.py`
 
 Exact commands are documented in
 [`../../../docs/hardware/HUAWEI_ASCEND.md`](../../../docs/hardware/HUAWEI_ASCEND.md).

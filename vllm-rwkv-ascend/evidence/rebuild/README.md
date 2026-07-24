@@ -38,3 +38,19 @@ The `pr_real_engine_*` files are a third run made from the exact ruff-formatted
 plugin tree proposed in this repository. It also reports `ACCEPTANCE_OK`; its
 scheduler trace has the same SHA256 as both earlier runs. `pr_SHA256SUMS`
 authenticates that JSON, trace, and full log.
+
+## Real 7.2B E2E throughput gate
+
+The follow-up `tests_vllm/run_e2e_performance.py` run uses the actual vLLM V1
+`LLM.generate` API and the batched recurrent decode implementation:
+
+| batch | aggregate output tok/s | per-request tok/s | B1 scaling |
+|---:|---:|---:|---:|
+| 1 | 9.09 | 9.09 | 1.00× |
+| 4 | 31.21 | 7.80 | 3.43× |
+| 8 | 32.54 | 4.07 | 3.58× |
+
+All rows produced 16 tokens per request, exactly matched the shared greedy
+prefix `[45, 308, 459]`, and passed the dynamic-scaling gate.
+`e2e_performance.json` is fail-closed and reports `status=PASS`; the adjacent
+log is the complete engine run.

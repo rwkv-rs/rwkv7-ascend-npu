@@ -1,0 +1,130 @@
+/data/work/sglang-upstream/python/sglang/srt/utils/hf_transformers/tokenizer.py:423: UserWarning: Using a slow tokenizer. This might cause a significant slowdown. Consider using a fast tokenizer instead.
+  warnings.warn(
+[transformers] You are using a model of type `rwkv7` to instantiate a model of type ``. This may be expected if you are loading a checkpoint that shares a subset of the architecture (e.g., loading a `sam2_video` checkpoint into `Sam2Model`), but is otherwise not supported and can yield errors. Please verify that the checkpoint is compatible with the model you are instantiating.
+/data/work/sglang-upstream/python/sglang/srt/utils/hf_transformers/tokenizer.py:423: UserWarning: Using a slow tokenizer. This might cause a significant slowdown. Consider using a fast tokenizer instead.
+  warnings.warn(
+/data/work/sglang-upstream/python/sglang/srt/utils/hf_transformers/tokenizer.py:423: UserWarning: Using a slow tokenizer. This might cause a significant slowdown. Consider using a fast tokenizer instead.
+  warnings.warn(
+[2026-07-24 06:09:15] NPU custom kernel packages unavailable: No module named 'custom_ops'
+/usr/local/python3.11.14/lib/python3.11/site-packages/torch_npu/contrib/transfer_to_npu.py:347: ImportWarning: 
+    *************************************************************************************************************
+    The torch.Tensor.cuda and torch.nn.Module.cuda are replaced with torch.Tensor.npu and torch.nn.Module.npu now..
+    The torch.cuda.DoubleTensor is replaced with torch.npu.FloatTensor cause the double type is not supported now..
+    The backend in torch.distributed.init_process_group set to hccl now..
+    The torch.cuda.* and torch.cuda.amp.* are replaced with torch.npu.* and torch.npu.amp.* now..
+    The device parameters have been replaced with npu in the function below:
+    torch.logspace, torch.randint, torch.hann_window, torch.rand, torch.full_like, torch.ones_like, torch.rand_like, torch.randperm, torch.arange, torch.frombuffer, torch.normal, torch._empty_per_channel_affine_quantized, torch.empty_strided, torch.empty_like, torch.scalar_tensor, torch.tril_indices, torch.bartlett_window, torch.ones, torch.sparse_coo_tensor, torch.randn, torch.kaiser_window, torch.tensor, torch.triu_indices, torch.as_tensor, torch.zeros, torch.randint_like, torch.full, torch.eye, torch._sparse_csr_tensor_unsafe, torch.empty, torch._sparse_coo_tensor_unsafe, torch.blackman_window, torch.zeros_like, torch.range, torch.sparse_csr_tensor, torch.randn_like, torch.from_file, torch._cudnn_init_dropout_state, torch._empty_affine_quantized, torch.linspace, torch.hamming_window, torch.empty_quantized, torch._pin_memory, torch.load, torch.set_default_device, torch.get_device_module, torch.sparse_compressed_tensor, torch.Tensor.new_empty, torch.Tensor.new_empty_strided, torch.Tensor.new_full, torch.Tensor.new_ones, torch.Tensor.new_tensor, torch.Tensor.new_zeros, torch.Tensor.to, torch.Tensor.pin_memory, torch.nn.Module.to, torch.nn.Module.to_empty
+    *************************************************************************************************************
+    
+  warnings.warn(msg, ImportWarning)
+/usr/local/python3.11.14/lib/python3.11/site-packages/torch_npu/contrib/transfer_to_npu.py:276: RuntimeWarning: torch.jit.script and torch.jit.script_method will be disabled by transfer_to_npu, which currently does not support them, if you need to enable them, please do not use transfer_to_npu.
+  warnings.warn(msg, RuntimeWarning)
+[Gloo] Rank 0 is connected to 0 peer ranks. Expected number of connected peer ranks is : 0
+[Gloo] Rank 0 is connected to 0 peer ranks. Expected number of connected peer ranks is : 0
+[Gloo] Rank 0 is connected to 0 peer ranks. Expected number of connected peer ranks is : 0
+[Gloo] Rank 0 is connected to 0 peer ranks. Expected number of connected peer ranks is : 0
+[2026-07-24 06:09:17] sgl_kernel_npu.norm.fused_rope_qk_mqa is unavailable; falling back to the generic rope implementation. Upgrade sgl_kernel_npu to enable the fused kernel.
+[2026-07-24 06:09:17] Ignore import error when loading sglang.srt.models.bailing_moe_linear: No module named 'sgl_kernel_npu'
+[2026-07-24 06:09:17] Ignore import error when loading sglang.srt.models.bailing_moe_nextn: No module named 'sgl_kernel_npu'
+[2026-07-24 06:09:17] Ignore import error when loading sglang.srt.models.deepseek_janus_pro: No module named 'sgl_kernel_npu'
+[2026-07-24 06:09:17] Ignore import error when loading sglang.srt.models.deepseek_nextn: No module named 'sgl_kernel_npu'
+[2026-07-24 06:09:17] Ignore import error when loading sglang.srt.models.deepseek_ocr: No module named 'sgl_kernel_npu'
+[2026-07-24 06:09:17] Ignore import error when loading sglang.srt.models.deepseek_v2: No module named 'sgl_kernel_npu'
+[2026-07-24 06:09:17] Ignore import error when loading sglang.srt.models.deepseek_v4: No module named 'sgl_kernel_npu'
+[2026-07-24 06:09:17] Ignore import error when loading sglang.srt.models.deepseek_v4_dspark: No module named 'sgl_kernel_npu'
+[2026-07-24 06:09:17] Ignore import error when loading sglang.srt.models.deepseek_v4_nextn: No module named 'sgl_kernel_npu'
+[2026-07-24 06:09:17] Ignore import error when loading sglang.srt.models.deepseek_vl2: No module named 'sgl_kernel_npu'
+[2026-07-24 06:09:17] Ignore import error when loading sglang.srt.models.dflash: No module named 'sgl_kernel_npu'
+[2026-07-24 06:09:17] Ignore import error when loading sglang.srt.models.dots_vlm: No module named 'sgl_kernel_npu'
+[2026-07-24 06:09:17] Ignore import error when loading sglang.srt.models.dspark: No module named 'sgl_kernel_npu'
+[2026-07-24 06:09:17] Ignore import error when loading sglang.srt.models.ernie4: No module named 'sgl_kernel_npu'
+[2026-07-24 06:09:17] Ignore import error when loading sglang.srt.models.ernie45_moe_vl: No module named 'sgl_kernel_npu'
+[2026-07-24 06:09:17] Ignore import error when loading sglang.srt.models.ernie45_vl: No module named 'sgl_kernel_npu'
+[2026-07-24 06:09:17] Ignore import error when loading sglang.srt.models.ernie4_eagle: No module named 'sgl_kernel_npu'
+[2026-07-24 06:09:17] Ignore import error when loading sglang.srt.models.falcon_h1: No module named 'sgl_kernel_npu'
+[2026-07-24 06:09:17] Ignore import error when loading sglang.srt.models.glm4_moe: No module named 'sgl_kernel_npu'
+[2026-07-24 06:09:17] Ignore import error when loading sglang.srt.models.glm4_moe_lite: No module named 'sgl_kernel_npu'
+[2026-07-24 06:09:17] Ignore import error when loading sglang.srt.models.glm4_moe_lite_nextn: No module named 'sgl_kernel_npu'
+[2026-07-24 06:09:17] Ignore import error when loading sglang.srt.models.glm4_moe_nextn: No module named 'sgl_kernel_npu'
+[2026-07-24 06:09:17] Ignore import error when loading sglang.srt.models.glm4v_moe: No module named 'sgl_kernel_npu'
+[2026-07-24 06:09:17] Ignore import error when loading sglang.srt.models.glm_image_vl: No module named 'sgl_kernel_npu'
+[2026-07-24 06:09:17] Ignore import error when loading sglang.srt.models.glmasr: No module named 'sgl_kernel_npu'
+[2026-07-24 06:09:17] Ignore import error when loading sglang.srt.models.granitemoehybrid: No module named 'sgl_kernel_npu'
+[2026-07-24 06:09:18] Ignore import error when loading sglang.srt.models.inkling: No module named 'sgl_kernel_npu'
+[2026-07-24 06:09:18] Ignore import error when loading sglang.srt.models.interns1: No module named 'sgl_kernel_npu'
+[2026-07-24 06:09:18] Ignore import error when loading sglang.srt.models.interns1pro: No module named 'sgl_kernel_npu'
+[2026-07-24 06:09:18] Ignore import error when loading sglang.srt.models.interns2preview: No module named 'sgl_kernel_npu'
+[2026-07-24 06:09:18] Ignore import error when loading sglang.srt.models.internvl: No module named 'sgl_kernel_npu'
+[2026-07-24 06:09:18] Ignore import error when loading sglang.srt.models.iquest_loopcoder: No module named 'sgl_kernel_npu'
+[2026-07-24 06:09:18] Ignore import error when loading sglang.srt.models.jet_nemotron: No module named 'sgl_kernel_npu'
+[2026-07-24 06:09:18] Ignore import error when loading sglang.srt.models.jet_vlm: No module named 'sgl_kernel_npu'
+[2026-07-24 06:09:18] Ignore import error when loading sglang.srt.models.kimi_k25: No module named 'sgl_kernel_npu'
+[2026-07-24 06:09:18] Ignore import error when loading sglang.srt.models.kimi_k25_eagle3: No module named 'sgl_kernel_npu'
+[2026-07-24 06:09:18] Ignore import error when loading sglang.srt.models.kimi_linear: No module named 'sgl_kernel_npu'
+[2026-07-24 06:09:18] Ignore import error when loading sglang.srt.models.kimi_vl: No module named 'sgl_kernel_npu'
+[2026-07-24 06:09:18] Ignore import error when loading sglang.srt.models.lightonocr: No module named 'sgl_kernel_npu'
+[2026-07-24 06:09:18] Ignore import error when loading sglang.srt.models.llama: No module named 'sgl_kernel_npu'
+[2026-07-24 06:09:18] Ignore import error when loading sglang.srt.models.llama4: No module named 'sgl_kernel_npu'
+[2026-07-24 06:09:18] Ignore import error when loading sglang.srt.models.llama_classification: No module named 'sgl_kernel_npu'
+[2026-07-24 06:09:18] Ignore import error when loading sglang.srt.models.llama_eagle: No module named 'sgl_kernel_npu'
+[2026-07-24 06:09:18] Ignore import error when loading sglang.srt.models.llama_eagle3: No module named 'sgl_kernel_npu'
+[2026-07-24 06:09:18] Ignore import error when loading sglang.srt.models.llama_embedding: No module named 'sgl_kernel_npu'
+[2026-07-24 06:09:18] Ignore import error when loading sglang.srt.models.llama_reward: No module named 'sgl_kernel_npu'
+[2026-07-24 06:09:18] Ignore import error when loading sglang.srt.models.llava: No module named 'sgl_kernel_npu'
+[2026-07-24 06:09:18] Ignore import error when loading sglang.srt.models.llavavid: No module named 'sgl_kernel_npu'
+[2026-07-24 06:09:18] Ignore import error when loading sglang.srt.models.longcat_flash: No module named 'sgl_kernel_npu'
+[2026-07-24 06:09:18] Ignore import error when loading sglang.srt.models.longcat_flash_nextn: No module named 'sgl_kernel_npu'
+[2026-07-24 06:09:18] Ignore import error when loading sglang.srt.models.mellum: No module named 'sgl_kernel_npu'
+[2026-07-24 06:09:18] Ignore import error when loading sglang.srt.models.midashenglm: No module named 'torchaudio'
+[2026-07-24 06:09:18] Ignore import error when loading sglang.srt.models.mindspore: No module named 'mindspore'
+[2026-07-24 06:09:18] Ignore import error when loading sglang.srt.models.minicpmo: No module named 'sgl_kernel_npu'
+[2026-07-24 06:09:18] Ignore import error when loading sglang.srt.models.minicpmv: No module named 'sgl_kernel_npu'
+[2026-07-24 06:09:18] Ignore import error when loading sglang.srt.models.minimax_m2: No module named 'sgl_kernel_npu'
+[2026-07-24 06:09:18] Ignore import error when loading sglang.srt.models.minimax_m3: No module named 'sgl_kernel_npu'
+[2026-07-24 06:09:18] Ignore import error when loading sglang.srt.models.minimax_m3_vl: No module named 'sgl_kernel_npu'
+[2026-07-24 06:09:18] Ignore import error when loading sglang.srt.models.ministral3: No module named 'sgl_kernel_npu'
+[2026-07-24 06:09:18] Ignore import error when loading sglang.srt.models.mistral: No module named 'sgl_kernel_npu'
+[2026-07-24 06:09:18] Ignore import error when loading sglang.srt.models.mistral_eagle: No module named 'sgl_kernel_npu'
+[2026-07-24 06:09:18] Ignore import error when loading sglang.srt.models.mistral_large_3: No module named 'sgl_kernel_npu'
+[2026-07-24 06:09:18] Ignore import error when loading sglang.srt.models.mistral_large_3_eagle: No module named 'sgl_kernel_npu'
+[2026-07-24 06:09:18] Ignore import error when loading sglang.srt.models.mllama: No module named 'sgl_kernel_npu'
+[2026-07-24 06:09:18] Ignore import error when loading sglang.srt.models.nano_nemotron_vl: No module named 'sgl_kernel_npu'
+[2026-07-24 06:09:18] Ignore import error when loading sglang.srt.models.nemotron_h: No module named 'sgl_kernel_npu'
+[2026-07-24 06:09:18] Ignore import error when loading sglang.srt.models.nemotron_h_mtp: No module named 'sgl_kernel_npu'
+[2026-07-24 06:09:18] Ignore import error when loading sglang.srt.models.nemotron_nas: No module named 'sgl_kernel_npu'
+[2026-07-24 06:09:18] Ignore import error when loading sglang.srt.models.paddleocr_vl: No module named 'sgl_kernel_npu'
+[2026-07-24 06:09:18] Ignore import error when loading sglang.srt.models.phi4mm: No module named 'sgl_kernel_npu'
+[2026-07-24 06:09:18] Ignore import error when loading sglang.srt.models.pixtral: No module named 'sgl_kernel_npu'
+[2026-07-24 06:09:18] Ignore import error when loading sglang.srt.models.qwen3: No module named 'sgl_kernel_npu'
+[2026-07-24 06:09:18] Ignore import error when loading sglang.srt.models.qwen3_5: No module named 'sgl_kernel_npu'
+[2026-07-24 06:09:18] Ignore import error when loading sglang.srt.models.qwen3_5_mtp: No module named 'sgl_kernel_npu'
+[2026-07-24 06:09:18] Ignore import error when loading sglang.srt.models.qwen3_asr: No module named 'sgl_kernel_npu'
+[2026-07-24 06:09:18] Ignore import error when loading sglang.srt.models.qwen3_classification: No module named 'sgl_kernel_npu'
+[2026-07-24 06:09:18] Ignore import error when loading sglang.srt.models.qwen3_moe: No module named 'sgl_kernel_npu'
+[2026-07-24 06:09:18] Ignore import error when loading sglang.srt.models.qwen3_moe_mtp: No module named 'sgl_kernel_npu'
+[2026-07-24 06:09:18] Ignore import error when loading sglang.srt.models.qwen3_next: No module named 'sgl_kernel_npu'
+[2026-07-24 06:09:18] Ignore import error when loading sglang.srt.models.qwen3_next_mtp: No module named 'sgl_kernel_npu'
+[2026-07-24 06:09:18] Ignore import error when loading sglang.srt.models.qwen3_omni_moe: No module named 'sgl_kernel_npu'
+[2026-07-24 06:09:18] Ignore import error when loading sglang.srt.models.qwen3_rm: No module named 'sgl_kernel_npu'
+[2026-07-24 06:09:18] Ignore import error when loading sglang.srt.models.qwen3_vl: No module named 'sgl_kernel_npu'
+[2026-07-24 06:09:18] Ignore import error when loading sglang.srt.models.qwen3_vl_moe: No module named 'sgl_kernel_npu'
+[2026-07-24 06:09:18] Ignore import error when loading sglang.srt.models.radio: No module named 'sgl_kernel_npu'
+[2026-07-24 06:09:18] Ignore import error when loading sglang.srt.models.sarashina2_vision: No module named 'sgl_kernel_npu'
+[2026-07-24 06:09:18] Ignore import error when loading sglang.srt.models.step3_vl_10b: No module named 'sgl_kernel_npu'
+[2026-07-24 06:09:18] Ignore import error when loading sglang.srt.models.step3p7: No module named 'sgl_kernel_npu'
+[2026-07-24 06:09:18] Ignore import error when loading sglang.srt.models.teleflm: No module named 'sgl_kernel_npu'
+[2026-07-24 06:09:18] Ignore import error when loading sglang.srt.models.unlimited_ocr: No module named 'sgl_kernel_npu'
+[2026-07-24 06:09:18] Ignore import error when loading sglang.srt.models.voxtral: No module named 'sgl_kernel_npu'
+[2026-07-24 06:09:18] Ignore import error when loading sglang.srt.models.yivl: No module named 'sgl_kernel_npu'
+Multi-thread loading shards:   0% Completed | 0/3 [00:00<?, ?it/s]Multi-thread loading shards:  33% Completed | 1/3 [00:02<00:05,  2.57s/it]Multi-thread loading shards:  67% Completed | 2/3 [00:05<00:02,  2.77s/it]Multi-thread loading shards: 100% Completed | 3/3 [00:08<00:00,  2.70s/it]Multi-thread loading shards: 100% Completed | 3/3 [00:08<00:00,  2.70s/it]
+/data/work/sglang-upstream/python/sglang/srt/utils/hf_transformers/tokenizer.py:423: UserWarning: Using a slow tokenizer. This might cause a significant slowdown. Consider using a fast tokenizer instead.
+  warnings.warn(
+/data/work/sglang-upstream/python/sglang/srt/utils/common.py:2180: UserWarning: The given NumPy array is not writable, and PyTorch does not support non-writable tensors. This means writing to this tensor will result in undefined behavior. You may want to copy the array to protect its data or make it writable before converting it to a tensor. This type of warning will be suppressed for the rest of this program. (Triggered internally at /pytorch/torch/csrc/utils/tensor_numpy.cpp:206.)
+  tensor_data = torch.ByteTensor(
+[2026-07-24 06:09:32] Grammar backend disabled because tokenizer is not supported by XGrammar: Failed to create XGrammar TokenizerInfo from tokenizer: Unsupported tokenizer type: <class 'transformers_modules._dot_e2e_hyphen_model_hyphen_view.c455842f103d7556.hf_rwkv_tokenizer.RwkvTokenizer'>. Falling back to grammar_backend='none'. Structured outputs (JSON schema, regex, EBNF) will not be available.
+E2E_ROW {"batch_outputs_identical": true, "batch_size": 1, "elapsed_s": 7.1008488070219755, "exact_hello_prefix": true, "first_output_token_ids": [45, 308, 459, 332, 22168, 32355, 4706, 22590, 38546, 47, 308, 459, 47629, 4811, 39740, 332], "input_tokens": 1, "measured": false, "output_tokens": 16, "output_tokens_per_second": 2.2532517498721734, "per_request_tokens_per_second": 2.2532517498721734}
+E2E_ROW {"batch_outputs_identical": true, "batch_size": 1, "elapsed_s": 2.778126621618867, "exact_hello_prefix": true, "first_output_token_ids": [45, 308, 459, 332, 22168, 32355, 4706, 22590, 38546, 47, 308, 459, 47629, 4811, 39740, 332], "input_tokens": 1, "measured": true, "output_tokens": 16, "output_tokens_per_second": 5.7592767282423205, "per_request_tokens_per_second": 5.7592767282423205}
+E2E_ROW {"batch_outputs_identical": true, "batch_size": 4, "elapsed_s": 3.440480683930218, "exact_hello_prefix": true, "first_output_token_ids": [45, 308, 459, 332, 22168, 32355, 4706, 22590, 38546, 47, 308, 459, 47629, 4811, 39740, 332], "input_tokens": 4, "measured": true, "output_tokens": 64, "output_tokens_per_second": 18.60205182924901, "per_request_tokens_per_second": 4.650512957312253}
+E2E_ROW {"batch_outputs_identical": true, "batch_size": 8, "elapsed_s": 4.220083957538009, "exact_hello_prefix": true, "first_output_token_ids": [45, 308, 459, 332, 22168, 32355, 4706, 22590, 38546, 47, 308, 459, 47629, 4811, 39740, 332], "input_tokens": 8, "measured": true, "output_tokens": 128, "output_tokens_per_second": 30.331150111685226, "per_request_tokens_per_second": 3.791393763960653}
+E2E_JSON {"axis": "sglang_ascend_real_7p2b_e2e_performance", "backend": "sglang-engine-eager", "config": {"attention_backend": "ascend", "chunked_prefill_size": 64, "device": "npu", "disable_cuda_graph": true, "disable_radix_cache": true, "dtype": "bfloat16", "enable_mixed_chunk": true, "log_level": "warning", "max_mamba_cache_size": 16, "max_running_requests": 8, "model_path": "/data/work/quant-ascend/rwkv7-sglang-ascend/.e2e-model-view", "page_size": 1, "trust_remote_code": true}, "dtype": "bfloat16", "engine_load_s": 41.010897112078965, "gates": {"all_rows_finite_positive": true, "b4_dynamic_batch_scaling": true, "b8_not_slower_than_b4": true, "batch_outputs_identical": true, "hello_greedy_exact": true}, "hardware": "Ascend910B3 64GB", "minimum_b4_scaling": 1.25, "model": "/data/models/fla-hub-rwkv7-7.2B-g0a", "new_tokens_per_request": 16, "rows": [{"batch_outputs_identical": true, "batch_size": 1, "elapsed_s": 2.778126621618867, "exact_hello_prefix": true, "first_output_token_ids": [45, 308, 459, 332, 22168, 32355, 4706, 22590, 38546, 47, 308, 459, 47629, 4811, 39740, 332], "input_tokens": 1, "measured": true, "output_tokens": 16, "output_tokens_per_second": 5.7592767282423205, "per_request_tokens_per_second": 5.7592767282423205}, {"batch_outputs_identical": true, "batch_size": 4, "elapsed_s": 3.440480683930218, "exact_hello_prefix": true, "first_output_token_ids": [45, 308, 459, 332, 22168, 32355, 4706, 22590, 38546, 47, 308, 459, 47629, 4811, 39740, 332], "input_tokens": 4, "measured": true, "output_tokens": 64, "output_tokens_per_second": 18.60205182924901, "per_request_tokens_per_second": 4.650512957312253}, {"batch_outputs_identical": true, "batch_size": 8, "elapsed_s": 4.220083957538009, "exact_hello_prefix": true, "first_output_token_ids": [45, 308, 459, 332, 22168, 32355, 4706, 22590, 38546, 47, 308, 459, 47629, 4811, 39740, 332], "input_tokens": 8, "measured": true, "output_tokens": 128, "output_tokens_per_second": 30.331150111685226, "per_request_tokens_per_second": 3.791393763960653}], "scaling_b4_over_b1": 3.229928462723164, "scaling_b8_over_b1": 5.266485974349425, "status": "PASS"}
+E2E_PASS
