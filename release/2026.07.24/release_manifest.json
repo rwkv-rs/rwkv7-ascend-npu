@@ -1,4 +1,5 @@
 {
+  "archive_normalization": "sorted-zip-stored-v1",
   "build_backend": "setuptools==79.0.1",
   "build_frontend": "build==1.3.0",
   "schema": "rwkv7-ascend-wheel-release-v1",
@@ -8,7 +9,7 @@
   "wheels": [
     {
       "archive_file_count": 119,
-      "bytes": 550834,
+      "bytes": 2355116,
       "distribution": "rwkv7-hf-adapter",
       "entry_points": {},
       "filename": "rwkv7_hf_adapter-0.6.0-py3-none-any.whl",
@@ -20,14 +21,14 @@
       },
       "pure_python": true,
       "requires_python": ">=3.10",
-      "sha256": "55c4894d3ea11c530afc02e848c09acd12de49ce79e55a43622d0def119d86ce",
+      "sha256": "e4f39fbcb3677d463de4a0a847102f4cded14b3eb7653a56f47b2bc717e16ea8",
       "source_tree_sha256": "8c368c43fc83514a054d70ddf6b189e61dd277caecedaa4f49fcf2fe14c56d5b",
       "tag": "py3-none-any",
       "version": "0.6.0"
     },
     {
       "archive_file_count": 11,
-      "bytes": 25136,
+      "bytes": 88627,
       "distribution": "rwkv7-vllm-ascend",
       "entry_points": {
         "vllm.general_plugins": {
@@ -45,14 +46,14 @@
       },
       "pure_python": true,
       "requires_python": "<3.12,>=3.10",
-      "sha256": "3a629cfc4a6ccbc61ddfcf4772726da57083f0b2ee841426e025af39e9d1a282",
+      "sha256": "4e5fb76894ee706f38a6b02fc324bd84b0d84345f09fc711223a1c7897d3272a",
       "source_tree_sha256": "0629f66a345ebc832bd3b09ad715f64c934168af07dc678102d28ce760e4bd66",
       "tag": "py3-none-any",
       "version": "0.3.0"
     },
     {
       "archive_file_count": 16,
-      "bytes": 48446,
+      "bytes": 152102,
       "distribution": "sglang-rwkv7-ascend",
       "entry_points": {
         "console_scripts": {
@@ -74,7 +75,7 @@
       },
       "pure_python": true,
       "requires_python": ">=3.10",
-      "sha256": "3ef8c3133051c86be27b1f887ce9b0ab821432824ca15b2ad5c129c83ad358ef",
+      "sha256": "587ed56aac60e36b565cb5ec33d82f85018f344bb2c85075ec81cd381edfe9bb",
       "source_tree_sha256": "ea28d469190cc1eb4ebaf4480994455dfa1ff731257e6567abe272916b6adc36",
       "tag": "py3-none-any",
       "version": "0.2.0"

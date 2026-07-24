@@ -16,6 +16,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -133,6 +134,37 @@ def _clean_build_state(spec: PackageSpec) -> None:
 
 def _record_digest(data: bytes) -> str:
     return base64.urlsafe_b64encode(hashlib.sha256(data).digest()).rstrip(b"=").decode()
+
+
+def _zip_timestamp(source_date_epoch: int) -> tuple[int, int, int, int, int, int]:
+    parts = list(time.gmtime(max(source_date_epoch, 315532800))[:6])
+    parts[5] -= parts[5] % 2  # DOS ZIP timestamps have two-second resolution.
+    return tuple(parts)
+
+
+def canonicalize_wheel(path: Path, source_date_epoch: int) -> None:
+    """Repack a wheel as a host-independent, store-only ZIP archive."""
+    with zipfile.ZipFile(path) as archive:
+        names = archive.namelist()
+        _require(len(names) == len(set(names)), "built wheel has duplicate paths")
+        _require(
+            all(not name.endswith("/") for name in names),
+            "built wheel unexpectedly contains directory entries",
+        )
+        payloads = {name: archive.read(name) for name in names}
+
+    timestamp = _zip_timestamp(source_date_epoch)
+    temporary = path.with_suffix(".canonical.whl")
+    with zipfile.ZipFile(temporary, "w", compression=zipfile.ZIP_STORED) as archive:
+        for name in sorted(payloads):
+            info = zipfile.ZipInfo(name, date_time=timestamp)
+            info.compress_type = zipfile.ZIP_STORED
+            info.create_system = 3
+            info.create_version = 20
+            info.extract_version = 20
+            info.external_attr = (stat.S_IFREG | 0o644) << 16
+            archive.writestr(info, payloads[name])
+    temporary.replace(path)
 
 
 def _inspect_record(archive: zipfile.ZipFile, names: list[str], dist_info: str) -> None:
@@ -307,6 +339,7 @@ def build_release(
             env=env,
         )
         wheel = output / spec.wheel
+        canonicalize_wheel(wheel, source_date_epoch)
         record = inspect_wheel(wheel, spec)
         record["install_smoke"] = install_smoke(wheel, spec, python)
         records.append(record)
@@ -323,6 +356,7 @@ def build_release(
         "build_frontend": "build==1.3.0",
         "build_backend": "setuptools==79.0.1",
         "wheel_tool": "wheel==0.46.3",
+        "archive_normalization": "sorted-zip-stored-v1",
         "wheels": records,
     }
     manifest_path = output / "release_manifest.json"

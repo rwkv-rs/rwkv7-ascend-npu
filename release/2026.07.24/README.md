@@ -8,9 +8,9 @@ do **not** bundle CANN, `torch_npu`, vLLM, SGLang, or an RWKV checkpoint.
 
 | component | version | wheel | bytes | SHA-256 |
 |---|---:|---|---:|---|
-| Hugging Face adapter | 0.6.0 | `rwkv7_hf_adapter-0.6.0-py3-none-any.whl` | 550834 | `55c4894d3ea11c530afc02e848c09acd12de49ce79e55a43622d0def119d86ce` |
-| vLLM Ascend plugin | 0.3.0 | `rwkv7_vllm_ascend-0.3.0-py3-none-any.whl` | 25136 | `3a629cfc4a6ccbc61ddfcf4772726da57083f0b2ee841426e025af39e9d1a282` |
-| SGLang Ascend plugin | 0.2.0 | `sglang_rwkv7_ascend-0.2.0-py3-none-any.whl` | 48446 | `3ef8c3133051c86be27b1f887ce9b0ab821432824ca15b2ad5c129c83ad358ef` |
+| Hugging Face adapter | 0.6.0 | `rwkv7_hf_adapter-0.6.0-py3-none-any.whl` | 2355116 | `e4f39fbcb3677d463de4a0a847102f4cded14b3eb7653a56f47b2bc717e16ea8` |
+| vLLM Ascend plugin | 0.3.0 | `rwkv7_vllm_ascend-0.3.0-py3-none-any.whl` | 88627 | `4e5fb76894ee706f38a6b02fc324bd84b0d84345f09fc711223a1c7897d3272a` |
+| SGLang Ascend plugin | 0.2.0 | `sglang_rwkv7_ascend-0.2.0-py3-none-any.whl` | 152102 | `587ed56aac60e36b565cb5ec33d82f85018f344bb2c85075ec81cd381edfe9bb` |
 
 `release_manifest.json` records the package metadata, source-tree digest,
 entry points, archive inspection, and isolated install smoke for each wheel.
@@ -61,10 +61,11 @@ cmp /tmp/rwkv7-ascend-release/SHA256SUMS \
     release/2026.07.24/SHA256SUMS
 ```
 
-The builder fixes `SOURCE_DATE_EPOCH`, verifies safe archive paths, rejects
-compiled payloads and symlinks, checks wheel metadata and entry points, verifies
-every `RECORD` digest and size, and imports each package from an isolated
-wheel-only target directory.
+The builder fixes `SOURCE_DATE_EPOCH`, canonicalizes each wheel into a sorted
+store-only ZIP so zlib versions cannot change its bytes, verifies safe archive
+paths, rejects compiled payloads and symlinks, checks wheel metadata and entry
+points, verifies every `RECORD` digest and size, and imports each package from
+an isolated wheel-only target directory.
 
 ## Admission boundary
 

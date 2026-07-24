@@ -40,6 +40,7 @@ def test_committed_wheels_match_manifest_and_source_tree() -> None:
     assert manifest["schema"] == "rwkv7-ascend-wheel-release-v1"
     assert manifest["status"] == "PASS"
     assert manifest["source_date_epoch"] == builder.DEFAULT_SOURCE_DATE_EPOCH
+    assert manifest["archive_normalization"] == "sorted-zip-stored-v1"
     assert len(manifest["wheels"]) == len(builder.PACKAGES) == 3
 
     by_filename = {record["filename"]: record for record in manifest["wheels"]}
@@ -97,6 +98,20 @@ def test_hardware_install_smoke_matches_wheels() -> None:
     for component in evidence["components"]:
         assert component["sha256"] == hashes[component["distribution"]]
         assert component["import"] == "PASS"
+
+
+def test_committed_wheels_use_canonical_store_only_zip() -> None:
+    builder = _load_builder()
+    timestamp = builder._zip_timestamp(builder.DEFAULT_SOURCE_DATE_EPOCH)
+    for package in builder.PACKAGES:
+        with zipfile.ZipFile(RELEASE / package.wheel) as archive:
+            infos = archive.infolist()
+        assert [info.filename for info in infos] == sorted(
+            info.filename for info in infos
+        )
+        assert all(info.compress_type == zipfile.ZIP_STORED for info in infos)
+        assert all(info.date_time == timestamp for info in infos)
+        assert all((info.external_attr >> 16) & 0o777 == 0o644 for info in infos)
 
 
 def test_wheel_inspection_fails_closed_on_duplicate_member(tmp_path: Path) -> None:
