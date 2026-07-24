@@ -42,6 +42,27 @@ fusion (it doesn't; a Cube kernel is 33× *slower* for B=1).
 
 Bit-exact vs eager. Full tables + methodology: [`BENCHMARK.md`](BENCHMARK.md).
 
+## Real 7.2B framework end-to-end acceptance
+
+The three Huawei paths now also have a common **real 7.2B BF16 engine
+benchmark**, separate from the small-model kernel and custom-serving numbers
+above. Each measured row starts with one `Hello` token per request, greedily
+generates 16 tokens, excludes one cold warm-up, and goes through the framework's
+public engine API. Values are aggregate output tokens per second on one 910B3.
+
+| framework API | B=1 | B=4 | B=8 | B4/B1 | status |
+|---|---:|---:|---:|---:|---|
+| Transformers `generate` | 13.15 | 47.58 | 99.22 | 3.62× | **pass** |
+| vLLM V1 `LLM.generate` | 9.09 | 31.21 | 32.54 | 3.43× | **pass** |
+| SGLang `Engine.generate` | 5.76 | 18.60 | 30.33 | 3.23× | **pass** |
+
+Every measured request reproduces the shared greedy prefix
+`[45, 308, 459]`; outputs within a batch are identical. The fail-closed gate
+requires exact output, finite positive throughput, B4 aggregate scaling of at
+least 1.25× over B1, and B8 throughput no lower than B4. These are in-process
+framework-engine E2E measurements, not HTTP/network benchmarks. Reproduction
+scripts and full logs live in each component's `evidence/rebuild` directory.
+
 ## Contributions
 
 - **NPUGraph B=1 decode → A100 parity.** Capture the ~960-op decode step as one
@@ -52,9 +73,10 @@ Bit-exact vs eager. Full tables + methodology: [`BENCHMARK.md`](BENCHMARK.md).
   the base the NPUGraph path captures. Includes a latent state-writeback correctness fix.
 - **AscendC toolchain on the 910B3**, with the 3 non-obvious build fixes + a reusable
   `build_op.sh` (a fused elementwise op runs 3.8× faster).
-- **Production serving framework** (OpenAI `/v1/completions`, streaming, sampler,
-  `SlottedScheduler`, 23 tests) — serves RWKV-7 on NPU now, while full vLLM serving is
-  blocked on an upstream version mismatch.
+- **Real framework engines.** Transformers, vLLM V1 and SGLang all load the
+  7.2B checkpoint and pass the common B1/B4/B8 decode-throughput gate; vLLM's
+  decode requests are now projected and recurrently updated as a true NPU batch
+  instead of being serialized per request.
 - **Cross-platform validation:** same-code **910B3 ≈ RTX 5070** (NPU ~1.15×) — the
   hardware is comparable; the optimized-path gap is software, which we close for B=1.
 - **SGLang port + Triton-ascend WKV** (2× over pure-torch) — a second serving path whose
@@ -91,7 +113,7 @@ The consolidated tree was rebuilt on the validated Ascend 910B3 environment:
 | component | focused tests | package build |
 |---|---:|---:|
 | `rwkv7-hf-ascend` | 18 passed | `rwkv7_hf_adapter-0.6.0` wheel |
-| `vllm-rwkv-ascend` V1 plugin | 18 passed | `rwkv7_vllm_ascend-0.3.0` wheel |
+| `vllm-rwkv-ascend` V1 plugin | 19 passed | `rwkv7_vllm_ascend-0.3.0` wheel |
 | `rwkv7-sglang-ascend` | 16 passed | `sglang_rwkv7_ascend-0.2.0` wheel |
 | shared W8/W4 quant layer | 19 passed, 4 skipped | import-safe shared module |
 

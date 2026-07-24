@@ -115,6 +115,31 @@ one physical slot across prefix lengths 0/64/.../481, and deterministic reuse
 of released slot 4. `SHA256SUMS` authenticates the JSON, server log, backend
 trace, and worker response.
 
+## Real 7.2B end-to-end throughput
+
+`scripts/run_e2e_performance.py` measures the actual SGLang
+`Engine.generate` path after one cold warm-up:
+
+| batch | aggregate output tok/s | per-request tok/s | B1 scaling |
+|---:|---:|---:|---:|
+| 1 | 5.76 | 5.76 | 1.00× |
+| 4 | 18.60 | 4.65 | 3.23× |
+| 8 | 30.33 | 3.79 | 5.27× |
+
+The real 7.2B BF16 run used 16 greedy output tokens per one-token request.
+Every row reproduced `[45, 308, 459]`, outputs within each batch were
+identical, B4 aggregate scaling exceeded the 1.25× gate, B8 exceeded B4, and
+the fail-closed JSON reports `status=PASS`.
+
+```bash
+python scripts/run_e2e_performance.py \
+  --model /path/to/fla-hub-rwkv7-7.2B-g0a \
+  --output evidence/rebuild/e2e_performance.json
+```
+
+This is an in-process SGLang engine benchmark. Long-running concurrency and
+HTTP/network throughput remain separate release gates.
+
 ## Serve
 
 ```bash

@@ -30,6 +30,34 @@ different-length dynamic batches, an actual 180-token prefill split by a
 32-token scheduler budget, mixed decode+prefill steps, reverse-order output
 stability, physical cache-slot reuse and zeroization of stale recurrent state.
 
+## Real 7.2B end-to-end throughput
+
+The plugin now batches independent one-token decode segments before executing
+the projections and recurrent update. This removes the former per-request
+serialization while retaining a separate recurrent state per physical vLLM
+slot.
+
+`tests_vllm/run_e2e_performance.py` measures the actual
+`vllm.LLM.generate` path after one cold warm-up:
+
+| batch | aggregate output tok/s | per-request tok/s | B1 scaling |
+|---:|---:|---:|---:|
+| 1 | 9.09 | 9.09 | 1.00× |
+| 4 | 31.21 | 7.80 | 3.43× |
+| 8 | 32.54 | 4.07 | 3.58× |
+
+The real 7.2B BF16 run used 16 greedy output tokens per one-token request.
+Every row reproduced `[45, 308, 459]`, batch outputs were identical, B4
+aggregate scaling exceeded the 1.25× gate, and the JSON reports `status=PASS`.
+This is vLLM V1 engine E2E throughput rather than the historical C++ forward
+microbenchmark.
+
+```bash
+python tests_vllm/run_e2e_performance.py \
+  --model /path/to/fla-hub-rwkv7-7.2B-g0a \
+  --output evidence/rebuild/e2e_performance.json
+```
+
 ## Installation
 
 PyPI metadata for vLLM 0.18 and vllm-ascend 0.18 requests incompatible PyTorch

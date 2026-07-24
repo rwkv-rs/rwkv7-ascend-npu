@@ -56,6 +56,28 @@ python tests/test_huawei_ascend_smoke.py \
 | B=2 ragged/cache/chunk path | passed |
 | allocated / peak HBM | 14,433,095,680 / 14,485,243,392 bytes |
 
+## Real 7.2B engine throughput
+
+`bench/run_e2e_performance.py` measures the public Transformers
+`model.generate` path after one cold warm-up. On the validated 910B3, BF16,
+one-token prompts and 16 generated tokens per request:
+
+| batch | aggregate output tok/s | per-request tok/s | peak allocated HBM |
+|---:|---:|---:|---:|
+| 1 | 13.15 | 13.15 | 14.68 GB |
+| 4 | 47.58 | 11.90 | 14.82 GB |
+| 8 | 99.22 | 12.40 | 15.10 GB |
+
+B4/B1 aggregate scaling is 3.62× and B8/B1 is 7.55×. Every request reproduced
+the shared greedy prefix `[45, 308, 459]`; the fail-closed JSON reports
+`status=PASS`. Reproduce with:
+
+```bash
+python bench/run_e2e_performance.py \
+  --model /path/to/fla-hub-rwkv7-7.2B-g0a \
+  --output bench/ascend_910b3_20260724/rebuild/e2e_performance.json
+```
+
 The clean-rebuild JSON, logs, hashes, commands, and environment metadata are in
 [`bench/ascend_910b3_20260724/rebuild/`](bench/ascend_910b3_20260724/rebuild/).
 The broader adapter documentation imported with the source is retained as

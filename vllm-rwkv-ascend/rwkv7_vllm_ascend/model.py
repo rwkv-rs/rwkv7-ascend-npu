@@ -209,7 +209,16 @@ class RWKV7Block(MambaBase, nn.Module):
         return x + (prev - x) * weight
 
     def _token_recurrence(self, x, state, att_prev, ffn_prev, v_first):
+        """Advance one token for either one request or a request batch.
+
+        ``x`` may be ``[D]`` or ``[B, D]``.  The old correctness path called
+        this method once per request, which made vLLM's dynamic batch execute
+        serially on the NPU.  Keeping the leading batch dimension here lets all
+        independent decode requests share the projection and recurrence
+        launches while preserving one recurrent state per physical slot.
+        """
         a = self.attn
+        leading = x.shape[:-1]
         residual = self.pre_norm(x) if self.layer_idx == 0 else x
         xx = self.attn_norm(residual)
         xr = self._mix(xx, att_prev, a.x_r.view(-1))
@@ -232,31 +241,34 @@ class RWKV7Block(MambaBase, nn.Module):
             vm = torch.sigmoid(a.v_lora.lora[2](a.v_lora.lora[0](xv)))
             v = v + (v_first - v) * vm
             next_v_first = v_first
-        w = torch.exp(-EXP_HALF * torch.sigmoid(w_raw)).view(
-            self.heads, 1, self.head_size
+        w = torch.exp(-EXP_HALF * torch.sigmoid(w_raw)).reshape(
+            *leading, self.heads, 1, self.head_size
         )
-        kk = (k * a.k_k).view(self.heads, self.head_size)
+        kk = (k * a.k_k).reshape(*leading, self.heads, self.head_size)
         kk = F.normalize(kk.float(), dim=-1, eps=1e-8).to(k.dtype)
         k = k * (1 + (aa - 1) * a.k_a)
-        kh, vh, rh, ah = (z.view(self.heads, self.head_size) for z in (k, v, r, aa))
+        kh, vh, rh, ah = (
+            z.reshape(*leading, self.heads, self.head_size) for z in (k, v, r, aa)
+        )
         ab = (-kk).unsqueeze(-1) @ (kk * ah).unsqueeze(-2)
         vk = vh.unsqueeze(-1) @ kh.unsqueeze(-2)
         state = state * w.float() + state @ ab.float() + vk.float()
         y = (
             (state.to(r.dtype) @ rh.unsqueeze(-1))
             .squeeze(-1)
-            .reshape(self.attention_hidden)
+            .reshape(*leading, self.attention_hidden)
         )
+        group_norm_input = y.reshape(-1, self.attention_hidden, 1)
         y = F.group_norm(
-            y.view(1, self.attention_hidden, 1),
+            group_norm_input,
             self.heads,
             a.g_norm.weight,
             a.g_norm.bias,
             a.g_norm.eps,
-        ).view(self.attention_hidden)
+        ).reshape(*leading, self.attention_hidden)
         sk = (rh * kh * a.r_k).sum(-1, keepdim=True)
-        y = (y.view(self.heads, self.head_size) + sk * vh).reshape(
-            self.attention_hidden
+        y = (y.reshape(*leading, self.heads, self.head_size) + sk * vh).reshape(
+            *leading, self.attention_hidden
         ) * g
         x = residual + a.o_proj(y)
         fx = self.ffn_norm(x)
@@ -386,12 +398,76 @@ class RWKV7Block(MambaBase, nn.Module):
         if len(cache) != 3:
             raise RuntimeError("RWKV-7 cache must contain (wkv, att_x, ffn_x)")
         wkv_cache, att_cache, ffn_cache = cache
-        for begin, end, slot, fresh in self._segments(metadata, hidden_states.shape[0]):
+        segments = self._segments(metadata, hidden_states.shape[0])
+        trace_path = os.getenv("RWKV7_TRACE_PATH")
+
+        # A vLLM decode step contains one independent token per active request.
+        # Run those requests as a real device batch rather than repeatedly
+        # invoking the model with a scalar row.  Singleton prefills are safe to
+        # include for the same reason: every segment owns a distinct state slot.
+        singleton_segments = [
+            segment for segment in segments if segment[1] - segment[0] == 1
+        ]
+        singleton_slots = [segment[2] for segment in singleton_segments]
+        if len(singleton_slots) != len(set(singleton_slots)):
+            # Duplicate physical slots would imply a scheduler contract
+            # violation.  Keep the fail-closed sequential path instead of
+            # performing an ambiguous indexed write.
+            singleton_segments = []
+
+        if singleton_segments:
+            positions = torch.tensor(
+                [segment[0] for segment in singleton_segments],
+                dtype=torch.long,
+                device=hidden_states.device,
+            )
+            slots = torch.tensor(
+                singleton_slots,
+                dtype=torch.long,
+                device=wkv_cache.device,
+            )
+            state = wkv_cache.index_select(0, slots).clone()
+            ap = att_cache.index_select(0, slots).clone()
+            fp = ffn_cache.index_select(0, slots).clone()
+            for row, (_, _, slot, fresh) in enumerate(singleton_segments):
+                if not fresh:
+                    continue
+                stale_nonzero = None
+                if trace_path and self.layer_idx == 0:
+                    stale_nonzero = bool(
+                        torch.count_nonzero(state[row]).item()
+                        or torch.count_nonzero(ap[row]).item()
+                        or torch.count_nonzero(fp[row]).item()
+                    )
+                state[row].zero_()
+                ap[row].zero_()
+                fp[row].zero_()
+                if stale_nonzero is not None:
+                    zero_event = {
+                        "event": "fresh_state_zero",
+                        "slot": slot,
+                        "pre_zero_had_nonzero": stale_nonzero,
+                        "post_zero_nonzero": False,
+                    }
+                    with open(trace_path, "a", encoding="utf-8") as trace_file:
+                        trace_file.write(json.dumps(zero_event, sort_keys=True) + "\n")
+            vt = None if v_first is None else v_first.index_select(0, positions)
+            batch_output, state, ap, fp, vo = self._token_recurrence(
+                hidden_states.index_select(0, positions), state, ap, fp, vt
+            )
+            output.index_copy_(0, positions, batch_output)
+            if self.layer_idx == 0:
+                vf_output.index_copy_(0, positions, vo)
+            wkv_cache.index_copy_(0, slots, state)
+            att_cache.index_copy_(0, slots, ap)
+            ffn_cache.index_copy_(0, slots, fp)
+
+        for begin, end, slot, fresh in segments:
+            if singleton_segments and end - begin == 1:
+                continue
             if fresh:
                 stale_nonzero = None
-                if (
-                    trace_path := os.getenv("RWKV7_TRACE_PATH")
-                ) and self.layer_idx == 0:
+                if trace_path and self.layer_idx == 0:
                     stale_nonzero = bool(
                         torch.count_nonzero(wkv_cache[slot]).item()
                         or torch.count_nonzero(att_cache[slot]).item()

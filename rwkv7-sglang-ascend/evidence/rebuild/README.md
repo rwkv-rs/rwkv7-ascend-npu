@@ -18,3 +18,18 @@ disabled, and the shared `Hello -> [45, 308, 459]` dense-token oracle.
 
 The measured 63.28 seconds is an acceptance-workload wall time including cold
 first inference, not a throughput claim.
+
+## Real 7.2B E2E throughput gate
+
+The separate warmed `scripts/run_e2e_performance.py` run goes through the real
+SGLang `Engine.generate` API:
+
+| batch | aggregate output tok/s | per-request tok/s | B1 scaling |
+|---:|---:|---:|---:|
+| 1 | 5.76 | 5.76 | 1.00× |
+| 4 | 18.60 | 4.65 | 3.23× |
+| 8 | 30.33 | 3.79 | 5.27× |
+
+All requests generated 16 tokens, matched `[45, 308, 459]`, and passed the
+dynamic-scaling gates. `e2e_performance.json` reports `status=PASS`; the
+adjacent log records the complete run.
