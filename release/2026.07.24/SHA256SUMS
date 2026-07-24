@@ -1,4 +1,4 @@
-baf1bee42f2c3c77a8694cdee7dff8a5e9e6d749b56ed0e2f9d504e4db3a7c3f  rwkv7_hf_adapter-0.6.0-py3-none-any.whl
-1d8c0ff751e1d2d91672197b1880e580d1110965d34ae3fd4dbe2475903ab729  rwkv7_vllm_ascend-0.3.0-py3-none-any.whl
-a59d923ab41afdba3141ce8edfb15d3131c18e864b20f92fecf253a089ea3ead  sglang_rwkv7_ascend-0.2.0-py3-none-any.whl
-3a3a9e9c87618669e6a1ff447ed12959bd343c3028fc1aec971266588c604b5d  release_manifest.json
+55c4894d3ea11c530afc02e848c09acd12de49ce79e55a43622d0def119d86ce  rwkv7_hf_adapter-0.6.0-py3-none-any.whl
+3a629cfc4a6ccbc61ddfcf4772726da57083f0b2ee841426e025af39e9d1a282  rwkv7_vllm_ascend-0.3.0-py3-none-any.whl
+3ef8c3133051c86be27b1f887ce9b0ab821432824ca15b2ad5c129c83ad358ef  sglang_rwkv7_ascend-0.2.0-py3-none-any.whl
+a490669ed776c96a333cfb60490e8f8eabbdb12230ee0857eb36b4414e18791d  release_manifest.json

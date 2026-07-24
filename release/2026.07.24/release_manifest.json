@@ -8,7 +8,7 @@
   "wheels": [
     {
       "archive_file_count": 119,
-      "bytes": 550188,
+      "bytes": 550834,
       "distribution": "rwkv7-hf-adapter",
       "entry_points": {},
       "filename": "rwkv7_hf_adapter-0.6.0-py3-none-any.whl",
@@ -20,14 +20,14 @@
       },
       "pure_python": true,
       "requires_python": ">=3.10",
-      "sha256": "baf1bee42f2c3c77a8694cdee7dff8a5e9e6d749b56ed0e2f9d504e4db3a7c3f",
-      "source_tree_sha256": "3c9e364ade7487bb5fd259557ca0615c6c58f70d005293118998e7b028f4ea18",
+      "sha256": "55c4894d3ea11c530afc02e848c09acd12de49ce79e55a43622d0def119d86ce",
+      "source_tree_sha256": "8c368c43fc83514a054d70ddf6b189e61dd277caecedaa4f49fcf2fe14c56d5b",
       "tag": "py3-none-any",
       "version": "0.6.0"
     },
     {
       "archive_file_count": 11,
-      "bytes": 25209,
+      "bytes": 25136,
       "distribution": "rwkv7-vllm-ascend",
       "entry_points": {
         "vllm.general_plugins": {
@@ -45,14 +45,14 @@
       },
       "pure_python": true,
       "requires_python": "<3.12,>=3.10",
-      "sha256": "1d8c0ff751e1d2d91672197b1880e580d1110965d34ae3fd4dbe2475903ab729",
-      "source_tree_sha256": "1afd783586bf55b1c2e3b28f7d6f6d88459b5d9c31edbcaaee7cbee3106fbdc6",
+      "sha256": "3a629cfc4a6ccbc61ddfcf4772726da57083f0b2ee841426e025af39e9d1a282",
+      "source_tree_sha256": "0629f66a345ebc832bd3b09ad715f64c934168af07dc678102d28ce760e4bd66",
       "tag": "py3-none-any",
       "version": "0.3.0"
     },
     {
       "archive_file_count": 16,
-      "bytes": 47848,
+      "bytes": 48446,
       "distribution": "sglang-rwkv7-ascend",
       "entry_points": {
         "console_scripts": {
@@ -74,8 +74,8 @@
       },
       "pure_python": true,
       "requires_python": ">=3.10",
-      "sha256": "a59d923ab41afdba3141ce8edfb15d3131c18e864b20f92fecf253a089ea3ead",
-      "source_tree_sha256": "920c76aeacf6984fe21e51e5c1e0837847cead899abcb03aeade11e5442161af",
+      "sha256": "3ef8c3133051c86be27b1f887ce9b0ab821432824ca15b2ad5c129c83ad358ef",
+      "source_tree_sha256": "ea28d469190cc1eb4ebaf4480994455dfa1ff731257e6567abe272916b6adc36",
       "tag": "py3-none-any",
       "version": "0.2.0"
     }

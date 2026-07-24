@@ -8,9 +8,9 @@ do **not** bundle CANN, `torch_npu`, vLLM, SGLang, or an RWKV checkpoint.
 
 | component | version | wheel | bytes | SHA-256 |
 |---|---:|---|---:|---|
-| Hugging Face adapter | 0.6.0 | `rwkv7_hf_adapter-0.6.0-py3-none-any.whl` | 550188 | `baf1bee42f2c3c77a8694cdee7dff8a5e9e6d749b56ed0e2f9d504e4db3a7c3f` |
-| vLLM Ascend plugin | 0.3.0 | `rwkv7_vllm_ascend-0.3.0-py3-none-any.whl` | 25209 | `1d8c0ff751e1d2d91672197b1880e580d1110965d34ae3fd4dbe2475903ab729` |
-| SGLang Ascend plugin | 0.2.0 | `sglang_rwkv7_ascend-0.2.0-py3-none-any.whl` | 47848 | `a59d923ab41afdba3141ce8edfb15d3131c18e864b20f92fecf253a089ea3ead` |
+| Hugging Face adapter | 0.6.0 | `rwkv7_hf_adapter-0.6.0-py3-none-any.whl` | 550834 | `55c4894d3ea11c530afc02e848c09acd12de49ce79e55a43622d0def119d86ce` |
+| vLLM Ascend plugin | 0.3.0 | `rwkv7_vllm_ascend-0.3.0-py3-none-any.whl` | 25136 | `3a629cfc4a6ccbc61ddfcf4772726da57083f0b2ee841426e025af39e9d1a282` |
+| SGLang Ascend plugin | 0.2.0 | `sglang_rwkv7_ascend-0.2.0-py3-none-any.whl` | 48446 | `3ef8c3133051c86be27b1f887ce9b0ab821432824ca15b2ad5c129c83ad358ef` |
 
 `release_manifest.json` records the package metadata, source-tree digest,
 entry points, archive inspection, and isolated install smoke for each wheel.

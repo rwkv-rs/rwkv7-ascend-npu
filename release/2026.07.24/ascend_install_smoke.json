@@ -23,7 +23,7 @@
       "component": "hugging-face",
       "distribution": "rwkv7-hf-adapter",
       "version": "0.6.0",
-      "sha256": "baf1bee42f2c3c77a8694cdee7dff8a5e9e6d749b56ed0e2f9d504e4db3a7c3f",
+      "sha256": "55c4894d3ea11c530afc02e848c09acd12de49ce79e55a43622d0def119d86ce",
       "import": "PASS",
       "ascend_runtime_discovery": "PASS"
     },
@@ -32,7 +32,7 @@
       "distribution": "rwkv7-vllm-ascend",
       "version": "0.3.0",
       "engine_version": "0.18.0",
-      "sha256": "1d8c0ff751e1d2d91672197b1880e580d1110965d34ae3fd4dbe2475903ab729",
+      "sha256": "3a629cfc4a6ccbc61ddfcf4772726da57083f0b2ee841426e025af39e9d1a282",
       "import": "PASS",
       "entry_point_registration": "PASS",
       "architectures": [
@@ -46,7 +46,7 @@
       "distribution": "sglang-rwkv7-ascend",
       "version": "0.2.0",
       "engine_commit": "d0b9689805232d8ab37789121cbc3b766b5c723e",
-      "sha256": "a59d923ab41afdba3141ce8edfb15d3131c18e864b20f92fecf253a089ea3ead",
+      "sha256": "3ef8c3133051c86be27b1f887ce9b0ab821432824ca15b2ad5c129c83ad358ef",
       "import": "PASS",
       "entry_point_registration": "PASS",
       "linear_attention_registry": "PASS",
