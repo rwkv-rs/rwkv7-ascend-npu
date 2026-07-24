@@ -108,9 +108,11 @@ Packed payload is about 50% of FP16 for W8 and 26.6% for group-128 W4, with no
 hidden dense FP16 weight copy.
 
 Selected 910B3 row counts beat the same-shape FP16 matmul in the raw synchronized
-operator sweep, but prior module/model probes did **not** pass every speed and
-quality gate. Production admission is therefore empty and fail-closed; W8/W4
-remain explicit experiments until a backend end-to-end artifact passes. See
+operator sweep. A real 7.2B all-FFN diagnostic reduced active HBM to 70.44% for
+W8 and 57.49% for W4, but paired decode was 0.9800x and 0.9756x FP16,
+respectively, and a near-tied greedy choice changed. Production admission is
+therefore empty and fail-closed; W8/W4 remain explicit experiments until a
+backend end-to-end artifact passes. See
 [`ASCEND_QUANT_ACCEPTANCE.md`](ASCEND_QUANT_ACCEPTANCE.md).
 
 ## License

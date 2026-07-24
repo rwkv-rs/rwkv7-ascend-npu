@@ -61,6 +61,20 @@ default. W8 has much smaller local error but is subject to the same rule. Prior
 end-to-end probes did not pass all latency and quality gates, so neither W8 nor
 W4 is currently production-enabled.
 
+The committed real-checkpoint diagnostic now quantizes all 64 FFN key/value
+projections of `fla-hub/rwkv7-7.2B-g0a`, removes the replaced FP16 weights, and
+measures alternating paired decode runs:
+
+| format | model tensor ratio | active HBM ratio | paired decode vs FP16 | min cosine | max NRMSE |
+|---|---:|---:|---:|---:|---:|
+| W8A16 | 0.70179 | 0.70437 | 0.9800x | 0.999976 | 0.009482 |
+| W4A16 group-128 + weight-CLE | 0.56188 | 0.57489 | 0.9756x | 0.995965 | 0.133690 |
+
+Both experiments satisfy the memory and numeric-threshold checks, but miss the
+no-slower decode gate and change one near-tied greedy choice on the fixed dense
+path. The exact JSON, logs, script hash, and commands are under
+`benchmarks/results/rebuild/`.
+
 The same clean rebuild also measured the actual Python module path. W8 passed
 the 1.02x microbenchmark floor at rows 17 and 28 on both projections, while W4
 fell below FP16 on the `4096 -> 16384` projection (0.922x at row 1 and 0.913x
