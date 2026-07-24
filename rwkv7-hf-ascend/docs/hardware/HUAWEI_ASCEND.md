@@ -300,6 +300,22 @@ The value-only W4 row used five alternating paired groups; individual speedups
 were 0.9458x-1.0474x. Its KL divergence was max 2.9047 / mean 0.4002 and top-20
 overlap min 0.40 / mean 0.85. It fails both the defined quality and speed gates.
 
+The newer affine W4 NPUGraph candidate resolves the latency failure without
+weakening the quality contract. Quantizing all 32 `ffn.value` projections
+reduces tensor payload and active HBM to 78.09% and 79.53% of FP16:
+
+| Batch | FP16 tok/s | W4 tok/s | Median paired W4/FP16 |
+|---:|---:|---:|---:|
+| 1 | 25.9486 | 27.1072 | 1.0453x |
+| 4 | 95.2419 | 98.3094 | 1.0321x |
+| 8 | 174.8964 | 181.1011 | 1.0370x |
+
+It still fails production quality: minimum cosine is 0.99847436, maximum NRMSE
+is 0.16532364, maximum production loss delta is 0.27381957, and only six of ten
+production prompts keep identical eight-token greedy output. The committed
+artifact is deliberately `FAIL` and is stored in
+`bench/ascend_910b3_w4_graph_20260724/`.
+
 Consequently W8 `policy="speed"` is enabled only for the exact accepted
 FP16/B1/B4/B8 tuple. `memory` and `candidate` remain explicit routes without a
 speed claim. In `ascend_quant_w4`, production

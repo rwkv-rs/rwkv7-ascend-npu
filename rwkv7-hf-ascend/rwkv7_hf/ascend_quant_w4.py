@@ -283,8 +283,31 @@ class AscendWeightOnlyLinear(nn.Module):
             wf = weight.float()
             groups = self.in_features // self.group_size
             grouped = wf.reshape(self.out_features, groups, self.group_size)
-            scale = (grouped.abs().amax(dim=2) / 7.0).clamp_min(1e-8)
-            q_nk = torch.round(grouped / scale[:, :, None]).clamp(-8, 7).to(torch.int32)
+            minimum = grouped.amin(dim=2)
+            maximum = grouped.amax(dim=2)
+            affine_scale = ((maximum - minimum) / 15.0).clamp_min(1e-8)
+            # Ascend reconstructs ``(q + antiquant_offset) * scale``.
+            affine_offset = minimum / affine_scale + 8.0
+            symmetric_scale = (
+                grouped.abs().amax(dim=2) / 7.0
+            ).clamp_min(1e-8)
+            use_affine = (
+                torch.isfinite(affine_offset)
+                & (affine_offset.abs() <= torch.finfo(torch.float16).max)
+            )
+            scale = torch.where(
+                use_affine,
+                affine_scale,
+                symmetric_scale,
+            )
+            offset = torch.where(
+                use_affine,
+                affine_offset,
+                torch.zeros_like(affine_offset),
+            )
+            q_nk = torch.round(
+                grouped / scale[:, :, None] - offset[:, :, None]
+            ).clamp(-8, 7).to(torch.int32)
             q_kn = q_nk.reshape(self.out_features, self.in_features).t().contiguous()
             if original_device.type == "npu":
                 packed = _torch_npu().npu_convert_weight_to_int4pack(q_kn)
@@ -292,7 +315,7 @@ class AscendWeightOnlyLinear(nn.Module):
                 packed = _pack_int4_cpu(q_kn)
             self.qweight = packed.to(original_device)
             self.scales = scale.t().to(device=original_device, dtype=torch.float16).contiguous()
-            self.offsets = torch.zeros_like(self.scales)
+            self.offsets = offset.t().to(device=original_device, dtype=torch.float16).contiguous()
         if self.has_bias:
             if bias is None or tuple(bias.shape) != (self.out_features,):
                 raise ValueError(f"bias must have shape {(self.out_features,)}")
@@ -372,7 +395,11 @@ class AscendWeightOnlyLinear(nn.Module):
         else:
             q_kn = _unpack_int4_cpu(self.qweight, self.out_features).float()
             scale_kn = self.scales.float().repeat_interleave(self.group_size, dim=0)
-            w = (q_kn * scale_kn).t().contiguous()
+            offset_kn = self.offsets.float().repeat_interleave(
+                self.group_size,
+                dim=0,
+            )
+            w = ((q_kn + offset_kn) * scale_kn).t().contiguous()
         out = F.linear(x2.float(), w, None)
         if self.has_bias:
             out = out + self.bias.float()
@@ -502,6 +529,9 @@ def quantize_ascend_w4a16_candidate(
         )
         _set_quant_submodule(model, name, replacement)
         replaced.append(name)
+    clear_graphs = getattr(model, "rwkv7_clear_native_graph_cache", None)
+    if replaced and callable(clear_graphs):
+        clear_graphs()
     return replaced
 
 

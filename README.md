@@ -157,8 +157,10 @@ The public HF W8 path now passes a real 7.2B NPUGraph backend gate on the exact
 FP16 910B3 stack at B1/B4/B8: isolated active HBM is 71.48% of FP16 and median
 paired speed is 1.020x-1.026x FP16. Its five production prompts have identical
 greedy output, while a retained synthetic stress row discloses one rank-2
-near-tied flip. The shared quant-only loader used by vLLM/SGLang remains
-fail-closed, as does every W4 route. See
+near-tied flip. A separate HF W4 value-only candidate reduces active HBM to
+79.53% and runs 1.032x-1.045x FP16, but fails strict generation/logit/loss
+quality gates and remains explicit/fail-closed. The shared quant-only loader
+used by vLLM/SGLang also remains fail-closed. See
 [`ASCEND_QUANT_ACCEPTANCE.md`](ASCEND_QUANT_ACCEPTANCE.md).
 
 ## License

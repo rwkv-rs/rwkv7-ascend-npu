@@ -47,7 +47,7 @@ python tests/test_huawei_ascend_smoke.py \
 
 | check | result |
 |---|---:|
-| focused CPU tests | 26 passed |
+| focused CPU tests | 27 passed |
 | real BF16 load/forward/generate | passed |
 | CPU oracle vs NPU tensors | 208 passed |
 | minimum logits cosine | 0.99996638 |
@@ -91,8 +91,10 @@ The broader adapter documentation imported with the source is retained as
 The public W8 speed policy is production-admitted only for the exact FP16
 910B3 stack, 7.2B FFN shapes, and logical rows B1/B4/B8. It reduces isolated
 active HBM to 71.48% of FP16 while measuring 1.020x-1.026x paired speedups.
-W4 and all other tuples remain experimental/fail-closed. Full quality,
-performance and limitation details are in
+The best broad W4 candidate reduces active HBM to 79.53% and is
+1.032x-1.045x FP16, but fails strict holdout generation/logit/loss gates.
+W4 and all other tuples therefore remain experimental/fail-closed. Full
+quality, performance and limitation details are in
 [`../ASCEND_QUANT_ACCEPTANCE.md`](../ASCEND_QUANT_ACCEPTANCE.md).
 
 ## Provenance and license
