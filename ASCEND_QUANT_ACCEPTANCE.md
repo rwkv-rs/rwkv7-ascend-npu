@@ -45,6 +45,31 @@ device/runtime stack, and even an explicit unvalidated-stack override. Evidence
 and reproduction commands are under
 `rwkv7-hf-ascend/bench/ascend_910b3_w8_graph_20260724/`.
 
+## HF W4 backend rejection
+
+The strict W4 gate uses the public
+`quantize_ascend_w4a16_candidate(..., require_explicit_candidate=False)` API.
+It applies affine group-128 W4 to all 32 FFN `value` contractions and exercises
+the same HF NPUGraph batches with seven alternating pairs:
+
+| Batch | FP16 tok/s | HF W4 tok/s | Median paired speedup |
+|---:|---:|---:|---:|
+| 1 | 25.9486 | 27.1072 | 1.0453x |
+| 4 | 95.2419 | 98.3094 | 1.0321x |
+| 8 | 174.8964 | 181.1011 | 1.0370x |
+
+Tensor payload and isolated active HBM fall to 78.09% and 79.53% of FP16, and
+the fixed timing prompt remains token-identical. Those wins are insufficient:
+the eleven-case/88-step gate records minimum cosine 0.99847436, maximum NRMSE
+0.16532364, maximum production loss delta 0.27381957, and identical generation
+on only six of ten production prompts. Several argmax changes are neither
+rank-2 nor near-tied.
+
+The artifact is therefore `FAIL`; `should_quantize(...)` remains false and the
+candidate API remains explicitly opt-in. JSON, log, hashes and reproduction
+commands are under
+`rwkv7-hf-ascend/bench/ascend_910b3_w4_graph_20260724/`.
+
 ## Raw-kernel candidates (not production acceptance)
 
 The clean-rebuild dispatch profile uses 30 warmups followed by seven rounds of

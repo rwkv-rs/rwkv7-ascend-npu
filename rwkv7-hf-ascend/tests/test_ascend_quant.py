@@ -173,10 +173,56 @@ def test_w4_candidate_is_explicit_and_packed(tmp_path):
     )
     assert float(cosine.detach()) > 0.98
     assert quant.packed_weight_bytes() < dense.weight.numel() * dense.weight.element_size()
+    assert bool(torch.count_nonzero(quant.offsets))
     save_quantized_linear(quant, tmp_path)
     restored = load_quantized_linear(tmp_path, enforce_verified_shape=False)
     assert torch.equal(restored.qweight, quant.qweight)
     assert torch.equal(restored.scales, quant.scales)
+    assert torch.equal(restored.offsets, quant.offsets)
+
+    constant = nn.Linear(32, 64, bias=False, dtype=torch.float16)
+    constant.weight.data.fill_(1.0)
+    constant_quant = AscendWeightOnlyLinear.from_float(
+        constant,
+        bit=4,
+        group_size=16,
+        enforce_verified_shape=False,
+    )
+    assert bool(torch.isfinite(constant_quant.scales).all())
+    assert bool(torch.isfinite(constant_quant.offsets).all())
+
+
+def test_w4_candidate_clears_existing_graph_cache(monkeypatch):
+    import rwkv7_hf.ascend_quant_w4 as quant_w4
+
+    class FFN(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.key = nn.Linear(8, 16, bias=False, dtype=torch.float16)
+            self.value = nn.Linear(16, 8, bias=False, dtype=torch.float16)
+
+    class Model(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.ffn = FFN()
+            self.clear_calls = 0
+
+        def rwkv7_clear_native_graph_cache(self):
+            self.clear_calls += 1
+
+    monkeypatch.setattr(
+        quant_w4,
+        "RAW_CANDIDATE_FFN_SHAPES",
+        ((8, 16), (16, 8)),
+    )
+    model = Model()
+    replaced = quant_w4.quantize_ascend_w4a16_candidate(
+        model,
+        group_size=8,
+        require_explicit_candidate=False,
+    )
+    assert replaced == ["ffn.key", "ffn.value"]
+    assert model.clear_calls == 1
 
 
 def test_w4_raw_candidate_is_not_a_production_promotion():
