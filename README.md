@@ -124,6 +124,10 @@ The consolidated tree was rebuilt on the validated Ascend 910B3 environment:
 The real 7.2B HF, vLLM, and SGLang acceptance artifacts remain in their
 component evidence directories. HF W8 now has a narrow exact-stack production
 admission; shared vLLM/SGLang W8 and every W4 route remain fail-closed.
+The serving evidence is also checked as one fail-closed contract by
+[`benchmarks/verify_serving_acceptance.py`](benchmarks/verify_serving_acceptance.py);
+see [`SERVING_ACCEPTANCE.md`](SERVING_ACCEPTANCE.md) for the admitted feature
+matrix and explicit exclusions.
 
 ## Quick start
 
