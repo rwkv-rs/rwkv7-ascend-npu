@@ -22,6 +22,7 @@ jobs:
       - name: rwkv7-hf-ascend (Huawei runtime, quant and oracle)
         run: |
           python -m pytest -q \
+            rwkv7-hf-ascend/tests/test_ascend_graph_runtime.py \
             rwkv7-hf-ascend/tests/test_ascend_quant.py \
             rwkv7-hf-ascend/tests/test_ascend_reference_oracle.py \
             rwkv7-hf-ascend/tests/test_ascend_runtime.py \

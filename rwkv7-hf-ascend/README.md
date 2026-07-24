@@ -20,7 +20,7 @@ Unknown devices and software stacks fail closed rather than inheriting the
 - `AutoConfig`, `AutoModel`, `AutoModelForCausalLM`, and generation
 - native recurrent cache with batch select/reorder/clone operations
 - ragged batch execution and chunked prefill
-- eager/native-JIT Ascend runtime selection
+- eager/native-JIT/fixed-batch NPUGraph Ascend runtime selection
 - independent CPU reference oracle and tensor-by-tensor NPU comparison
 - W8/W4 experimental weight-only helpers and W4 channel equalization
 - save/reload and a small training forward/backward smoke path
@@ -80,6 +80,10 @@ python bench/run_e2e_performance.py \
 
 The clean-rebuild JSON, logs, hashes, commands, and environment metadata are in
 [`bench/ascend_910b3_20260724/rebuild/`](bench/ascend_910b3_20260724/rebuild/).
+The opt-in `backend="native_graph"` FP16 gate reaches
+29.87/70.37/141.70 output tok/s at B1/B4/B8 after capture; its fixed-batch
+semantics, limits and evidence are documented in
+[`docs/hardware/HUAWEI_ASCEND.md`](docs/hardware/HUAWEI_ASCEND.md).
 The broader adapter documentation imported with the source is retained as
 [`UPSTREAM_README.md`](UPSTREAM_README.md).
 

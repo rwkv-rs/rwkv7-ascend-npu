@@ -155,23 +155,28 @@ def configure_ascend_defaults(*, backend: str = "eager", overwrite: bool = False
     """Select a fail-closed native backend suitable for torch_npu.
 
     ``eager`` is the portable default. ``native_jit`` is the packed pure-torch
-    decode route and is useful after a card-local correctness smoke. CUDA graph,
-    Triton, FLA, bitsandbytes and CUDA extensions are never enabled here.
+    decode route. ``native_graph`` captures the fixed-batch native module path
+    with torch-npu NPUGraph after an exact-stack validation. Triton, FLA,
+    bitsandbytes and CUDA extensions are never enabled here.
     Explicit user environment values win unless ``overwrite=True``.
     """
 
     aliases = {"torch": "eager", "jit": "native_jit", "auto": "auto"}
     backend = aliases.get(str(backend).strip().lower(), str(backend).strip().lower())
-    if backend not in {"eager", "native_jit", "auto"}:
-        raise ValueError("Ascend backend must be eager, native_jit, or auto")
+    if backend not in {"eager", "native_jit", "native_graph", "auto"}:
+        raise ValueError(
+            "Ascend backend must be eager, native_jit, native_graph, or auto"
+        )
     values = {
         "RWKV7_NATIVE_MODEL": "1",
         "RWKV7_NATIVE_MODEL_BACKEND": backend,
-        "RWKV7_NATIVE_MODEL_JIT": "0" if backend == "eager" else "1",
+        "RWKV7_NATIVE_MODEL_JIT": (
+            "0" if backend in {"eager", "native_graph"} else "1"
+        ),
         "RWKV7_FAST_FORWARD": "0",
         "RWKV7_FAST_CACHE": "0",
         "RWKV7_FAST_PREFILL": "0",
-        "RWKV7_NATIVE_GRAPH": "0",
+        "RWKV7_NATIVE_GRAPH": "1" if backend == "native_graph" else "0",
         "RWKV7_NATIVE_PREFILL_GRAPH": "0",
     }
     for key, value in values.items():
