@@ -17,7 +17,7 @@
     "trust_remote_code": true
   },
   "dtype": "bfloat16",
-  "engine_load_s": 41.010897112078965,
+  "engine_load_s": 46.26434314157814,
   "gates": {
     "all_rows_finite_positive": true,
     "b4_dynamic_batch_scaling": true,
@@ -33,7 +33,7 @@
     {
       "batch_outputs_identical": true,
       "batch_size": 1,
-      "elapsed_s": 2.778126621618867,
+      "elapsed_s": 2.6377375377342105,
       "exact_hello_prefix": true,
       "first_output_token_ids": [
         45,
@@ -56,13 +56,13 @@
       "input_tokens": 1,
       "measured": true,
       "output_tokens": 16,
-      "output_tokens_per_second": 5.7592767282423205,
-      "per_request_tokens_per_second": 5.7592767282423205
+      "output_tokens_per_second": 6.065804414242001,
+      "per_request_tokens_per_second": 6.065804414242001
     },
     {
       "batch_outputs_identical": true,
       "batch_size": 4,
-      "elapsed_s": 3.440480683930218,
+      "elapsed_s": 2.700108195655048,
       "exact_hello_prefix": true,
       "first_output_token_ids": [
         45,
@@ -85,13 +85,13 @@
       "input_tokens": 4,
       "measured": true,
       "output_tokens": 64,
-      "output_tokens_per_second": 18.60205182924901,
-      "per_request_tokens_per_second": 4.650512957312253
+      "output_tokens_per_second": 23.702753875932576,
+      "per_request_tokens_per_second": 5.925688468983144
     },
     {
       "batch_outputs_identical": true,
       "batch_size": 8,
-      "elapsed_s": 4.220083957538009,
+      "elapsed_s": 2.8170293932780623,
       "exact_hello_prefix": true,
       "first_output_token_ids": [
         45,
@@ -114,11 +114,11 @@
       "input_tokens": 8,
       "measured": true,
       "output_tokens": 128,
-      "output_tokens_per_second": 30.331150111685226,
-      "per_request_tokens_per_second": 3.791393763960653
+      "output_tokens_per_second": 45.43793554495064,
+      "per_request_tokens_per_second": 5.67974194311883
     }
   ],
-  "scaling_b4_over_b1": 3.229928462723164,
-  "scaling_b8_over_b1": 5.266485974349425,
+  "scaling_b4_over_b1": 3.9076027278889005,
+  "scaling_b8_over_b1": 7.4908342640039915,
   "status": "PASS"
 }

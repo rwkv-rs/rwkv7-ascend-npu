@@ -357,13 +357,15 @@ class RWKV7Block(MambaBase, nn.Module):
     def forward(self, hidden_states: torch.Tensor, v_first: torch.Tensor | None):
         context = get_forward_context()
         all_metadata = context.attn_metadata
-        output = hidden_states.clone()
-        vf_output = (
-            hidden_states.new_zeros((hidden_states.shape[0], self.attention_hidden))
-            if self.layer_idx == 0
-            else v_first
-        )
         if all_metadata is None:
+            output = hidden_states.clone()
+            vf_output = (
+                hidden_states.new_zeros(
+                    (hidden_states.shape[0], self.attention_hidden)
+                )
+                if self.layer_idx == 0
+                else v_first
+            )
             state = torch.zeros(
                 self.heads,
                 self.head_size,
@@ -398,8 +400,72 @@ class RWKV7Block(MambaBase, nn.Module):
         if len(cache) != 3:
             raise RuntimeError("RWKV-7 cache must contain (wkv, att_x, ffn_x)")
         wkv_cache, att_cache, ffn_cache = cache
-        segments = self._segments(metadata, hidden_states.shape[0])
         trace_path = os.getenv("RWKV7_TRACE_PATH")
+
+        # Hugging Face's native fast path keeps every active request in one
+        # device batch and never parses scheduler metadata inside the layer
+        # loop.  Mirror that execution shape for the overwhelmingly common
+        # pure-decode step.  In particular, avoid per-request ``Tensor.item()``
+        # calls (NPU -> host synchronizations), rebuilding position tensors,
+        # and clone/index_copy of the layer output.
+        #
+        # The trace path deliberately retains the generic implementation below
+        # because acceptance evidence needs host-visible slot/fresh-state
+        # events. Mixed decode+prefill and speculative decode also stay on the
+        # correctness-first segmented path.
+        num_decodes = int(metadata.num_decodes)
+        num_decode_tokens = int(metadata.num_decode_tokens)
+        decode_slots = getattr(metadata, "state_indices_tensor_d", None)
+        if decode_slots is None:
+            combined_slots = getattr(metadata, "state_indices_tensor", None)
+            if combined_slots is not None:
+                decode_slots = combined_slots[:num_decodes]
+        pure_decode = (
+            trace_path is None
+            and int(metadata.num_prefills) == 0
+            and num_decodes == num_decode_tokens == hidden_states.shape[0]
+            and decode_slots is not None
+        )
+        if pure_decode:
+            slots = (
+                decode_slots[:num_decodes]
+                .reshape(-1)
+                .to(device=wkv_cache.device, dtype=torch.long)
+                .clamp_min(0)
+            )
+            state = wkv_cache.index_select(0, slots)
+            ap = att_cache.index_select(0, slots)
+            fp = ffn_cache.index_select(0, slots)
+
+            # vLLM classifies a newly admitted one-token prompt as decode.
+            # Clear any recycled physical-slot contents entirely on device.
+            seq_lens = getattr(metadata, "seq_lens", None)
+            if seq_lens is not None:
+                fresh = (
+                    seq_lens[:num_decodes]
+                    .reshape(-1)
+                    .to(device=state.device)
+                    .eq(1)
+                )
+                state.masked_fill_(fresh.view(-1, 1, 1, 1), 0)
+                ap.masked_fill_(fresh.view(-1, 1), 0)
+                fp.masked_fill_(fresh.view(-1, 1), 0)
+
+            batch_output, state, ap, fp, next_v_first = self._token_recurrence(
+                hidden_states, state, ap, fp, v_first
+            )
+            wkv_cache.index_copy_(0, slots, state)
+            att_cache.index_copy_(0, slots, ap)
+            ffn_cache.index_copy_(0, slots, fp)
+            return batch_output, next_v_first
+
+        output = hidden_states.clone()
+        vf_output = (
+            hidden_states.new_zeros((hidden_states.shape[0], self.attention_hidden))
+            if self.layer_idx == 0
+            else v_first
+        )
+        segments = self._segments(metadata, hidden_states.shape[0])
 
         # A vLLM decode step contains one independent token per active request.
         # Run those requests as a real device batch rather than repeatedly

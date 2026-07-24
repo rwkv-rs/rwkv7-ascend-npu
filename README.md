@@ -53,8 +53,8 @@ public engine API. Values are aggregate output tokens per second on one 910B3.
 | framework API | B=1 | B=4 | B=8 | B4/B1 | status |
 |---|---:|---:|---:|---:|---|
 | Transformers `generate` | 13.15 | 47.58 | 99.22 | 3.62× | **pass** |
-| vLLM V1 `LLM.generate` | 9.09 | 31.21 | 32.54 | 3.43× | **pass** |
-| SGLang `Engine.generate` | 5.76 | 18.60 | 30.33 | 3.23× | **pass** |
+| vLLM V1 `LLM.generate` | 10.35 | 38.17 | 39.28 | 3.69× | **pass** |
+| SGLang `Engine.generate` | 6.07 | 23.70 | 45.44 | 3.91× | **pass** |
 
 Every measured request reproduces the shared greedy prefix
 `[45, 308, 459]`; outputs within a batch are identical. The fail-closed gate
@@ -62,6 +62,10 @@ requires exact output, finite positive throughput, B4 aggregate scaling of at
 least 1.25× over B1, and B8 throughput no lower than B4. These are in-process
 framework-engine E2E measurements, not HTTP/network benchmarks. Reproduction
 scripts and full logs live in each component's `evidence/rebuild` directory.
+The vLLM and SGLang rows include the HF-derived batch-state execution shape:
+vLLM's pure-decode path stays device-side instead of parsing each slot with
+`Tensor.item()` in every layer, while SGLang advances the whole active batch in
+one recurrence rather than looping over requests in Python.
 
 ## Contributions
 

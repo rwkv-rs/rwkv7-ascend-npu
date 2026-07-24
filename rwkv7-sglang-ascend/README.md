@@ -118,13 +118,15 @@ trace, and worker response.
 ## Real 7.2B end-to-end throughput
 
 `scripts/run_e2e_performance.py` measures the actual SGLang
-`Engine.generate` path after one cold warm-up:
+`Engine.generate` path after one cold warm-up. The pure-torch kernel borrows
+HF's batch-state execution shape: time remains sequential, but all independent
+requests advance together instead of a Python loop over batch entries.
 
 | batch | aggregate output tok/s | per-request tok/s | B1 scaling |
 |---:|---:|---:|---:|
-| 1 | 5.76 | 5.76 | 1.00× |
-| 4 | 18.60 | 4.65 | 3.23× |
-| 8 | 30.33 | 3.79 | 5.27× |
+| 1 | 6.07 | 6.07 | 1.00× |
+| 4 | 23.70 | 5.93 | 3.91× |
+| 8 | 45.44 | 5.68 | 7.49× |
 
 The real 7.2B BF16 run used 16 greedy output tokens per one-token request.
 Every row reproduced `[45, 308, 459]`, outputs within each batch were

@@ -26,10 +26,12 @@ SGLang `Engine.generate` API:
 
 | batch | aggregate output tok/s | per-request tok/s | B1 scaling |
 |---:|---:|---:|---:|
-| 1 | 5.76 | 5.76 | 1.00× |
-| 4 | 18.60 | 4.65 | 3.23× |
-| 8 | 30.33 | 3.79 | 5.27× |
+| 1 | 6.07 | 6.07 | 1.00× |
+| 4 | 23.70 | 5.93 | 3.91× |
+| 8 | 45.44 | 5.68 | 7.49× |
 
 All requests generated 16 tokens, matched `[45, 308, 459]`, and passed the
 dynamic-scaling gates. `e2e_performance.json` reports `status=PASS`; the
-adjacent log records the complete run.
+adjacent log records the complete run. The capture uses a vectorized batched
+recurrence derived from the HF native path while retaining SGLang's physical
+slot ownership and gather/scatter lifecycle.

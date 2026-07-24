@@ -14,7 +14,7 @@
     "num_gpu_blocks_override": 8,
     "trust_remote_code": true
   },
-  "engine_load_s": 68.55242765881121,
+  "engine_load_s": 82.13231600262225,
   "gates": {
     "all_rows_finite_positive": true,
     "b4_dynamic_batch_scaling": true,
@@ -30,7 +30,7 @@
     {
       "batch_outputs_identical": true,
       "batch_size": 1,
-      "elapsed_s": 1.7607146874070168,
+      "elapsed_s": 1.5460668429732323,
       "exact_hello_prefix": true,
       "first_output_token_ids": [
         45,
@@ -53,13 +53,13 @@
       "input_tokens": 1,
       "measured": true,
       "output_tokens": 16,
-      "output_tokens_per_second": 9.087219022159125,
-      "per_request_tokens_per_second": 9.087219022159125
+      "output_tokens_per_second": 10.348841043140471,
+      "per_request_tokens_per_second": 10.348841043140471
     },
     {
       "batch_outputs_identical": true,
       "batch_size": 4,
-      "elapsed_s": 2.0506203807890415,
+      "elapsed_s": 1.6767153143882751,
       "exact_hello_prefix": true,
       "first_output_token_ids": [
         45,
@@ -82,13 +82,13 @@
       "input_tokens": 4,
       "measured": true,
       "output_tokens": 64,
-      "output_tokens_per_second": 31.210067255536572,
-      "per_request_tokens_per_second": 7.802516813884143
+      "output_tokens_per_second": 38.16986667372896,
+      "per_request_tokens_per_second": 9.54246666843224
     },
     {
       "batch_outputs_identical": true,
       "batch_size": 8,
-      "elapsed_s": 3.9333952739834785,
+      "elapsed_s": 3.2588129872456193,
       "exact_hello_prefix": true,
       "first_output_token_ids": [
         45,
@@ -111,8 +111,8 @@
       "input_tokens": 8,
       "measured": true,
       "output_tokens": 128,
-      "output_tokens_per_second": 32.54186042440891,
-      "per_request_tokens_per_second": 4.067732553051114
+      "output_tokens_per_second": 39.27810540247873,
+      "per_request_tokens_per_second": 4.909763175309841
     }
   ],
   "runtime": {
@@ -120,7 +120,7 @@
     "vllm": "0.18.0",
     "vllm_ascend": "0.18.0"
   },
-  "scaling_b4_over_b1": 3.434501488236503,
-  "scaling_b8_over_b1": 3.5810582253003687,
+  "scaling_b4_over_b1": 3.688322829060083,
+  "scaling_b8_over_b1": 3.7954110260987592,
   "status": "PASS"
 }

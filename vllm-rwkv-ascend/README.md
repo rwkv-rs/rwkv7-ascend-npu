@@ -33,18 +33,21 @@ stability, physical cache-slot reuse and zeroization of stale recurrent state.
 ## Real 7.2B end-to-end throughput
 
 The plugin now batches independent one-token decode segments before executing
-the projections and recurrent update. This removes the former per-request
-serialization while retaining a separate recurrent state per physical vLLM
-slot.
+the projections and recurrent update. Its HF-derived pure-decode fast path also
+consumes the scheduler's device slot tensor directly, avoiding per-request
+`Tensor.item()` host synchronizations, temporary position tensors, and
+clone/index-copy of the layer output. It still retains a separate recurrent
+state per physical vLLM slot; mixed prefill/decode and acceptance tracing remain
+on the segmented correctness path.
 
 `tests_vllm/run_e2e_performance.py` measures the actual
 `vllm.LLM.generate` path after one cold warm-up:
 
 | batch | aggregate output tok/s | per-request tok/s | B1 scaling |
 |---:|---:|---:|---:|
-| 1 | 9.09 | 9.09 | 1.00× |
-| 4 | 31.21 | 7.80 | 3.43× |
-| 8 | 32.54 | 4.07 | 3.58× |
+| 1 | 10.35 | 10.35 | 1.00× |
+| 4 | 38.17 | 9.54 | 3.69× |
+| 8 | 39.28 | 4.91 | 3.80× |
 
 The real 7.2B BF16 run used 16 greedy output tokens per one-token request.
 Every row reproduced `[45, 308, 459]`, batch outputs were identical, B4

@@ -46,11 +46,12 @@ The follow-up `tests_vllm/run_e2e_performance.py` run uses the actual vLLM V1
 
 | batch | aggregate output tok/s | per-request tok/s | B1 scaling |
 |---:|---:|---:|---:|
-| 1 | 9.09 | 9.09 | 1.00× |
-| 4 | 31.21 | 7.80 | 3.43× |
-| 8 | 32.54 | 4.07 | 3.58× |
+| 1 | 10.35 | 10.35 | 1.00× |
+| 4 | 38.17 | 9.54 | 3.69× |
+| 8 | 39.28 | 4.91 | 3.80× |
 
 All rows produced 16 tokens per request, exactly matched the shared greedy
 prefix `[45, 308, 459]`, and passed the dynamic-scaling gate.
 `e2e_performance.json` is fail-closed and reports `status=PASS`; the adjacent
-log is the complete engine run.
+log is the complete engine run. This capture includes the HF-derived
+device-side pure-decode metadata/state fast path.
