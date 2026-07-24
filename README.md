@@ -129,6 +129,12 @@ The serving evidence is also checked as one fail-closed contract by
 see [`SERVING_ACCEPTANCE.md`](SERVING_ACCEPTANCE.md) for the admitted feature
 matrix and explicit exclusions.
 
+The same vLLM and SGLang engines also pass a 30-minute B1/B4/B8/B4 churn gate:
+1993 total cycles, 8467 requests, exact output throughout, zero median HBM
+growth, bounded memory slope, recurrent-slot reuse, and HBM reclaim after
+shutdown. Full artifacts are in
+[`benchmarks/results/serving_soak_20260724/`](benchmarks/results/serving_soak_20260724/).
+
 ## Quick start
 
 On a 910B3 box (CANN 8.5.0 + `torch_npu`, `rwkv7_hf` + the C++ forward reachable):

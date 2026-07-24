@@ -16,6 +16,8 @@ framework stacks and real `fla-hub/rwkv7-7.2B-g0a` checkpoint.
 | deterministic output after slot reuse | pass | pass |
 | shared `Hello` greedy prefix | `[45, 308, 459]` | `[45, 308, 459]` |
 | B1/B4/B8 throughput gate | pass | pass |
+| 30-minute B1/B4/B8/B4 churn | pass | pass |
+| bounded HBM growth / post-shutdown reclaim | pass | pass |
 
 The framework throughput rows are:
 
@@ -45,6 +47,24 @@ checks scheduler-level invariants rather than trusting top-level `PASS` fields.
 It rejects missing/corrupt artifacts, model or hardware drift, output mismatch,
 prefill-budget violations, absent continuation/mixed-batch events, and
 inconsistent physical-slot reuse.
+
+## Long-run resource gate
+
+The separate real-engine soak runs each backend for at least 1800 measured
+seconds after warm-up. It requires one exact eight-token sequence across every
+request, physical recurrent-slot reuse, tail throughput of at least 80% of the
+head window, HBM tail growth no greater than 256 MiB, HBM slope no greater than
+128 MiB/hour, and post-shutdown return to within 256 MiB of the idle sample.
+
+Both backends pass:
+
+| backend | cycles / requests | HBM head → tail | slope | shutdown HBM |
+|---|---:|---:|---:|---:|
+| vLLM | 1015 / 4314 | 17689 → 17689 MiB | 0.084 MiB/h | 3452 MiB |
+| SGLang | 978 / 4153 | 18610 → 18610 MiB | -0.058 MiB/h | 3492 MiB |
+
+Full JSON, logs, traces, hashes and commands are under
+[`benchmarks/results/serving_soak_20260724/`](benchmarks/results/serving_soak_20260724/).
 
 ## Fail-closed boundaries
 
