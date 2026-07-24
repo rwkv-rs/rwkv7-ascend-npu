@@ -236,13 +236,13 @@ names. With no model argument the runner creates and deletes a tiny random HF
 fixture. Pass a converted official model directory as the first argument for a
 real-checkpoint smoke.
 
-## Candidate-only W8/W4 FFN paths
+## Production HF W8 and candidate-only W4
 
 `rwkv7_hf.ascend_quant` provides a physically packed W8A16 Linear using
-`torch_npu.npu_weight_quant_batchmatmul`. Production speed policy is
-fail-closed for every tuple because the whole-model gates below fail.
-Raw-operator candidates were measured only on the exact stack Ascend 910B3 /
-CANN 8.5.0 / torch 2.9.0+cpu / torch_npu 2.9.0 / FP16, for these FFN shapes:
+`torch_npu.npu_weight_quant_batchmatmul`. Its production speed policy is
+fail-closed to the exact stack Ascend 910B3 / CANN 8.5.0 /
+torch 2.9.0+cpu / torch_npu 2.9.0 / FP16, these 7.2B FFN shapes, and
+logical rows B1/B4/B8:
 
 - `ffn.key`: 4096 -> 16384
 - `ffn.value`: 16384 -> 4096
@@ -251,17 +251,44 @@ CANN 8.5.0 / torch 2.9.0+cpu / torch_npu 2.9.0 / FP16, for these FFN shapes:
 import torch
 from rwkv7_hf import enable_ascend, quantize_ascend_w8a16
 
-enable_ascend("npu:0", backend="eager")
+enable_ascend("npu:0", backend="native_graph")
 model = AutoModelForCausalLM.from_pretrained(
     model_dir, trust_remote_code=True, dtype=torch.float16
 ).eval().to("npu:0")
-replaced = quantize_ascend_w8a16(model, policy="candidate", strict=True)
+replaced = quantize_ascend_w8a16(model, policy="speed", strict=True)
 print(replaced)
 ```
 
 Each W8 replacement retains int8 `[K,N]` weight plus a 16-bit per-output
-scale and no dense parameter. Raw operators and isolated contraction modules are
-fast, but the real 7.2B whole-model gate rejects production promotion:
+scale and no dense parameter. Conversion clears an existing graph cache, and
+the graph key tracks W8 buffer identity so a dense capture cannot be replayed
+after replacement. Runtime logical rows outside B1/B4/B8 raise instead of
+silently inheriting the performance claim.
+
+The real 7.2B production gate quantizes all 64 FFN key/value projections and
+uses five alternating FP16/W8 `transformers.generate` pairs after capture:
+
+| Batch | FP16 tok/s | W8 tok/s | Median paired W8/FP16 |
+|---:|---:|---:|---:|
+| 1 | 25.8451 | 26.4352 | 1.0241x |
+| 4 | 94.2471 | 96.0139 | 1.0205x |
+| 8 | 173.7094 | 178.3984 | 1.0259x |
+
+Model tensor payload is 70.18% of FP16 and isolated active HBM is 71.48%.
+All timed 32-token outputs match FP16 exactly. Five production prompts covering
+English, Chinese, Python, instruction text and the one-token `Hello` prompt
+also match for eight greedy tokens. Across the full 48-step comparison,
+minimum logit cosine is 0.99994028, maximum normalized RMSE is 0.01338704,
+minimum top-20 overlap is 0.95, and maximum production-corpus loss delta is
+0.01193333.
+
+A retained synthetic stress diagnostic has one near-tied greedy flip: the W8
+choice is rank 2 under FP16 and the FP16 top-1 margin is 0.02734375. This
+diagnostic remains included in the global logit thresholds but is not presented
+as a natural-language corpus row. JSON, log and hashes are in
+`bench/ascend_910b3_w8_graph_20260724/`.
+
+Earlier eager/BF16 and W4 candidates did not pass the same production gate:
 
 | Candidate | Model payload | Single-model HBM | Paired decode | Min logit cosine | Greedy |
 |---|---:|---:|---:|---:|---|
@@ -273,17 +300,18 @@ The value-only W4 row used five alternating paired groups; individual speedups
 were 0.9458x-1.0474x. Its KL divergence was max 2.9047 / mean 0.4002 and top-20
 overlap min 0.40 / mean 0.85. It fails both the defined quality and speed gates.
 
-Consequently `policy="speed"` is fail-closed for W8, while `memory` and
-`candidate` require explicit selection. In `ascend_quant_w4`, production
+Consequently W8 `policy="speed"` is enabled only for the exact accepted
+FP16/B1/B4/B8 tuple. `memory` and `candidate` remain explicit routes without a
+speed claim. In `ascend_quant_w4`, production
 `should_quantize(...)` returns `False` for every tuple; the separate
 `raw_candidate_supported(...)` function reports only exact-stack diagnostic
 coverage and never authorizes serving. W4 is exposed only through
 `quantize_ascend_w4a16_candidate(..., require_explicit_candidate=False)` and is
 never automatic. W4 conversion rejects BF16 before mutating any layer because
-the raw candidate is FP16-only. Raw operator wins (W8 up to 2.05x and selective
-W4 wins) are stored with status `measured`, explicit operator gates and
-`production_gate_pass=false`, not as whole-model passes. GPTQ/AWQ or another
-calibrated quantizer plus fused/graph dispatch is required before promotion.
+the raw candidate is FP16-only. W4 raw-operator wins remain stored with
+explicit candidate gates and never authorize whole-model serving. GPTQ/AWQ or
+another calibrated quantizer plus fused/graph dispatch is required before W4
+promotion.
 
 
 ### W4 CLE/AWQ calibration candidate (not validated on NPU)
@@ -322,7 +350,7 @@ As of this evidence row, the repository has not established on this host:
 - PEFT/Trainer/TRL and real-checkpoint training on NPU (only tiny native backward/update passed);
 - dynamic-shape NPU Graph and graph-captured prefill (fixed-batch decode only);
 - paired prefill/decode throughput or long-duration serving stability;
-- whole-model W8/W4 with lower peak HBM and paired end-to-end speed not below FP16;
+- W4 production admission, plus HF W8 beyond the exact 7.2B FP16 B1/B4/B8 row;
 - multi-NPU HCCL/device-map execution.
 
 Do not infer those outcomes from the tiny compatibility smoke.

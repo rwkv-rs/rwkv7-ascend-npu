@@ -1,7 +1,14 @@
+from types import SimpleNamespace
+
 import torch
 import torch.nn as nn
 
-from rwkv7_hf.ascend_quant import AscendW8A16Linear, ascend_w8a16_decision
+import rwkv7_hf.ascend_quant as ascend_quant
+from rwkv7_hf.ascend_quant import (
+    ASCEND_910B3_W8_SPEED_ROWS,
+    AscendW8A16Linear,
+    ascend_w8a16_decision,
+)
 
 
 def test_w8_linear_cpu_oracle_and_payload():
@@ -25,11 +32,29 @@ def test_speed_policy_is_exact_shape_role_card_and_rows(monkeypatch):
         torch_npu_version="2.9.0",
         cann_version="8.5.0",
     )
-    rejected = ascend_w8a16_decision(
+    promoted = ascend_w8a16_decision(
+        "model.layers.0.ffn.value", 16384, 4096,
+        **exact_stack, rows=8, dtype=torch.float16, policy="speed",
+    )
+    assert promoted.enabled and promoted.speed_validated
+    assert promoted.stack_validated
+    assert ascend_w8a16_decision(
+        "model.layers.0.ffn.key", 4096, 16384,
+        **exact_stack, rows=None, dtype=torch.float16, policy="speed",
+    ).enabled
+    for rows in ASCEND_910B3_W8_SPEED_ROWS:
+        assert ascend_w8a16_decision(
+            "model.layers.0.ffn.key", 4096, 16384,
+            **exact_stack, rows=rows, dtype=torch.float16, policy="speed",
+        ).enabled
+    assert not ascend_w8a16_decision(
+        "model.layers.0.ffn.value", 16384, 4096,
+        **exact_stack, rows=2, dtype=torch.float16, policy="speed",
+    ).enabled
+    assert not ascend_w8a16_decision(
         "model.layers.0.ffn.value", 16384, 4096,
         **exact_stack, rows=8, dtype=torch.bfloat16, policy="speed",
-    )
-    assert not rejected.enabled and not rejected.speed_validated
+    ).enabled
     candidate = ascend_w8a16_decision(
         "model.layers.0.ffn.value", 16384, 4096,
         **exact_stack, rows=8, dtype=torch.bfloat16, policy="candidate",
@@ -71,12 +96,63 @@ def test_speed_policy_is_exact_shape_role_card_and_rows(monkeypatch):
     )
     assert not wrong_stack.enabled
     monkeypatch.setenv("RWKV7_ALLOW_UNVALIDATED_ASCEND", "1")
+    speed_override = ascend_w8a16_decision(
+        "model.layers.0.ffn.value", 16384, 4096,
+        **{**exact_stack, "device_name": "Ascend910B4"},
+        rows=8,
+        dtype=torch.float16,
+        policy="speed",
+    )
+    assert not speed_override.enabled and not speed_override.stack_validated
     overridden = ascend_w8a16_decision(
         "model.layers.0.ffn.value", 16384, 4096,
         **{**exact_stack, "device_name": "Ascend910B4"}, policy="candidate",
     )
     assert overridden.enabled and not overridden.stack_validated
     assert "unvalidated" in overridden.reason
+
+
+def test_w8_speed_module_records_runtime_rows():
+    dense = nn.Linear(32, 64, bias=False, dtype=torch.float16)
+    quant = AscendW8A16Linear.from_float(
+        dense,
+        admitted_rows=(8, 1, 4, 4),
+    )
+    assert quant.admitted_rows == (1, 4, 8)
+    assert quant.bit == 8 and quant.group_size == 0
+    quant._validate_runtime_rows(1)
+    quant._validate_runtime_rows(4)
+    quant._validate_runtime_rows(8)
+    try:
+        quant._validate_runtime_rows(2)
+    except RuntimeError as exc:
+        assert "not production-validated" in str(exc)
+    else:  # pragma: no cover - fail-closed row enforcement is mandatory
+        raise AssertionError("unmeasured W8 row count was accepted")
+
+
+def test_w8_speed_model_selection_requires_exact_complete_7b_architecture():
+    config = SimpleNamespace(
+        hidden_size=4096,
+        intermediate_size=16384,
+        num_hidden_layers=32,
+    )
+    model = SimpleNamespace(config=config)
+    names = tuple(
+        f"model.layers.{layer}.{role}"
+        for layer in range(32)
+        for role in ("ffn.key", "ffn.value")
+    )
+    assert ascend_quant._speed_model_selection_reason(model, names) is None
+    assert "all 64" in ascend_quant._speed_model_selection_reason(
+        model,
+        names[:-1],
+    )
+    config.num_hidden_layers = 31
+    assert "num_hidden_layers=32" in ascend_quant._speed_model_selection_reason(
+        model,
+        names,
+    )
 
 
 def test_w4_candidate_is_explicit_and_packed(tmp_path):

@@ -9,7 +9,6 @@ reduces its resident payload to about one half.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -36,6 +35,12 @@ _PROMOTED_910B3_W8_SHAPES = {
     # (in_features, out_features): validated logical role
     (4096, 16384): "ffn.key",
     (16384, 4096): "ffn.value",
+}
+ASCEND_910B3_W8_SPEED_ROWS = (1, 4, 8)
+_ASCEND_910B3_W8_SPEED_CONFIG = {
+    "hidden_size": 4096,
+    "intermediate_size": 16384,
+    "num_hidden_layers": 32,
 }
 
 
@@ -64,11 +69,11 @@ def ascend_w8a16_decision(
 ) -> AscendQuantDecision:
     """Return a fail-closed W8 decision for one logical Linear.
 
-    Speed promotion is exact to Ascend 910B3, FFN value contraction,
-    fp16/bf16 activation, and measured logical row counts 1..8. ``rows=None``
-    is used at load time: it permits packing the exact projection, while the
-    result correctly keeps ``speed_validated=False`` until a measured row count
-    is known. Expand is available only through the explicit memory policy.
+    Speed promotion is exact to Ascend 910B3, both 7.2B FFN projections, FP16
+    activation, and measured logical row counts B1/B4/B8. ``rows=None`` is the
+    load-time preflight: it permits packing only because the replacement module
+    enforces the measured rows again at runtime. Other cards, stacks, dtypes,
+    shapes and row counts remain fail-closed.
     """
 
     policy = str(policy).strip().lower()
@@ -86,12 +91,6 @@ def ascend_w8a16_decision(
         return AscendQuantDecision(False, f"shape {shape} has no promoted 910B3 W8 row", policy)
     if not role.endswith(expected_role):
         return AscendQuantDecision(False, f"shape {shape} is not named as {expected_role}", policy)
-    if policy == "speed":
-        return AscendQuantDecision(
-            False,
-            "7.2B whole-model W8 gate failed quality and paired decode speed; no production speed route",
-            policy,
-        )
     stack_validated, stack_reason = validate_ascend_stack(
         device_name=device_name,
         torch_version=torch_version,
@@ -99,6 +98,40 @@ def ascend_w8a16_decision(
         cann_version=cann_version,
     )
     override = allow_unvalidated_ascend()
+    if policy == "speed":
+        if not stack_validated:
+            return AscendQuantDecision(
+                False,
+                f"unvalidated Ascend production stack: {stack_reason}",
+                policy,
+            )
+        if dtype_text not in {"float16", "fp16", "half"}:
+            return AscendQuantDecision(
+                False,
+                "production W8 speed route requires FP16 activations",
+                policy,
+                stack_validated=True,
+            )
+        if rows is not None and int(rows) not in ASCEND_910B3_W8_SPEED_ROWS:
+            return AscendQuantDecision(
+                False,
+                (
+                    f"logical rows {int(rows)} are not in measured W8 rows "
+                    f"{ASCEND_910B3_W8_SPEED_ROWS}"
+                ),
+                policy,
+                stack_validated=True,
+            )
+        return AscendQuantDecision(
+            True,
+            (
+                "real 7.2B HF NPUGraph W8 route passed quality, HBM and "
+                "paired no-slower gates"
+            ),
+            policy,
+            speed_validated=True,
+            stack_validated=True,
+        )
     if not stack_validated and not override:
         return AscendQuantDecision(
             False,
@@ -135,24 +168,51 @@ def ascend_w8a16_decision(
 class AscendW8A16Linear(nn.Module):
     """Per-output-channel int8 Linear backed by npu_weight_quant_batchmatmul."""
 
-    def __init__(self, in_features: int, out_features: int, *, bias: bool = False, dtype: torch.dtype = torch.float16) -> None:
+    def __init__(
+        self,
+        in_features: int,
+        out_features: int,
+        *,
+        bias: bool = False,
+        dtype: torch.dtype = torch.float16,
+        admitted_rows: tuple[int, ...] = (),
+    ) -> None:
         super().__init__()
         if bias:
             raise ValueError("AscendW8A16Linear currently supports bias-free RWKV projections only")
         self.in_features = int(in_features)
         self.out_features = int(out_features)
+        self.bit = 8
+        self.group_size = 0
+        self.admitted_rows = tuple(
+            sorted({int(row) for row in admitted_rows})
+        )
+        if any(row <= 0 for row in self.admitted_rows):
+            raise ValueError("admitted W8 row counts must be positive")
         # Operator ABI is transposed [K, N], unlike nn.Linear [N, K].
         self.register_buffer("q_weight", torch.empty(self.in_features, self.out_features, dtype=torch.int8))
         self.register_buffer("scale", torch.empty(self.out_features, dtype=dtype))
 
     @classmethod
     @torch.no_grad()
-    def from_float(cls, linear: nn.Linear, *, chunk_rows: int = 1024) -> "AscendW8A16Linear":
+    def from_float(
+        cls,
+        linear: nn.Linear,
+        *,
+        chunk_rows: int = 1024,
+        admitted_rows: tuple[int, ...] = (),
+    ) -> "AscendW8A16Linear":
         if linear.bias is not None:
             raise ValueError("RWKV Ascend W8 conversion requires a bias-free Linear")
         if linear.weight.dtype not in {torch.float16, torch.bfloat16}:
             raise ValueError(f"Ascend W8A16 requires fp16/bf16 source weight; got {linear.weight.dtype}")
-        module = cls(linear.in_features, linear.out_features, bias=False, dtype=linear.weight.dtype).to(linear.weight.device)
+        module = cls(
+            linear.in_features,
+            linear.out_features,
+            bias=False,
+            dtype=linear.weight.dtype,
+            admitted_rows=admitted_rows,
+        ).to(linear.weight.device)
         chunk_rows = max(1, int(chunk_rows))
         weight = linear.weight.detach()
         for start in range(0, linear.out_features, chunk_rows):
@@ -172,11 +232,24 @@ class AscendW8A16Linear(nn.Module):
     def dense_fp16_bytes(self) -> int:
         return self.in_features * self.out_features * 2
 
+    def _validate_runtime_rows(self, logical_rows: int) -> None:
+        logical_rows = int(logical_rows)
+        if (
+            self.admitted_rows
+            and logical_rows not in self.admitted_rows
+        ):
+            raise RuntimeError(
+                f"Ascend W8 logical rows {logical_rows} were not "
+                f"production-validated; admitted rows={self.admitted_rows}"
+            )
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if int(x.shape[-1]) != self.in_features:
             raise ValueError(f"input last dim {x.shape[-1]} != in_features {self.in_features}")
         original_shape = x.shape[:-1]
         if x.device.type == "npu":
+            logical_rows = int(x.numel()) // self.in_features
+            self._validate_runtime_rows(logical_rows)
             if x.dtype != self.scale.dtype:
                 raise TypeError(f"Ascend W8A16 activation dtype {x.dtype} must match scale dtype {self.scale.dtype}")
             # Preserve the 2-D decode/prefill fast path without extra view calls.
@@ -198,6 +271,37 @@ def _set_submodule(root: nn.Module, qualified_name: str, replacement: nn.Module)
     setattr(parent, leaf, replacement)
 
 
+def _speed_model_selection_reason(
+    model: nn.Module,
+    selected_names: tuple[str, ...],
+) -> str | None:
+    """Reject partial or lookalike models before the production path mutates."""
+
+    config = getattr(model, "config", None)
+    for field, expected in _ASCEND_910B3_W8_SPEED_CONFIG.items():
+        actual = getattr(config, field, None)
+        if actual is None or int(actual) != expected:
+            return (
+                f"production W8 requires {field}={expected}; "
+                f"got {actual!r}"
+            )
+    expected_names = {
+        f"model.layers.{layer}.{role}"
+        for layer in range(_ASCEND_910B3_W8_SPEED_CONFIG["num_hidden_layers"])
+        for role in ("ffn.key", "ffn.value")
+    }
+    actual_names = set(selected_names)
+    if actual_names != expected_names or len(selected_names) != len(expected_names):
+        missing = sorted(expected_names - actual_names)
+        unexpected = sorted(actual_names - expected_names)
+        return (
+            "production W8 requires exactly all 64 canonical 7.2B FFN "
+            f"projections; selected={len(selected_names)}, "
+            f"missing={missing[:4]}, unexpected={unexpected[:4]}"
+        )
+    return None
+
+
 @torch.no_grad()
 def quantize_ascend_w8a16(
     model: nn.Module,
@@ -213,6 +317,7 @@ def quantize_ascend_w8a16(
     known operator-compatible large FFN shapes but does not make a speed claim.
     """
 
+    policy = str(policy).strip().lower()
     parameter = next(model.parameters(), None)
     if parameter is None:
         return []
@@ -242,17 +347,37 @@ def quantize_ascend_w8a16(
         )
         if decision.enabled:
             selected.append((name, module))
-    if strict and not selected:
-        raise RuntimeError("No exact Ascend W8A16 projection matched this model/card policy")
+    rejection_reason = None
+    if policy == "speed":
+        rejection_reason = _speed_model_selection_reason(
+            model,
+            tuple(name for name, _ in selected),
+        )
+    elif not selected:
+        rejection_reason = "No exact Ascend W8A16 projection matched this model/card policy"
+    if rejection_reason is not None:
+        if strict:
+            raise RuntimeError(rejection_reason)
+        return []
     replaced: list[str] = []
     for name, module in selected:
-        replacement = AscendW8A16Linear.from_float(module, chunk_rows=chunk_rows)
+        replacement = AscendW8A16Linear.from_float(
+            module,
+            chunk_rows=chunk_rows,
+            admitted_rows=(
+                ASCEND_910B3_W8_SPEED_ROWS if policy == "speed" else ()
+            ),
+        )
         _set_submodule(model, name, replacement)
         replaced.append(name)
+    clear_graphs = getattr(model, "rwkv7_clear_native_graph_cache", None)
+    if replaced and callable(clear_graphs):
+        clear_graphs()
     return replaced
 
 
 __all__ = [
+    "ASCEND_910B3_W8_SPEED_ROWS",
     "AscendQuantDecision", "AscendW8A16Linear", "ascend_w8a16_decision",
     "quantize_ascend_w8a16",
 ]

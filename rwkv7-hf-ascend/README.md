@@ -22,7 +22,7 @@ Unknown devices and software stacks fail closed rather than inheriting the
 - ragged batch execution and chunked prefill
 - eager/native-JIT/fixed-batch NPUGraph Ascend runtime selection
 - independent CPU reference oracle and tensor-by-tensor NPU comparison
-- W8/W4 experimental weight-only helpers and W4 channel equalization
+- exact-stack W8 production inference, experimental W4, and W4 channel equalization
 - save/reload and a small training forward/backward smoke path
 
 ## Install and test
@@ -32,6 +32,7 @@ source /usr/local/Ascend/ascend-toolkit/set_env.sh
 python -m pip install -e .
 
 python -m pytest -q \
+  tests/test_ascend_graph_runtime.py \
   tests/test_ascend_quant.py \
   tests/test_ascend_reference_oracle.py \
   tests/test_ascend_runtime.py \
@@ -46,7 +47,7 @@ python tests/test_huawei_ascend_smoke.py \
 
 | check | result |
 |---|---:|
-| focused CPU tests | 18 passed |
+| focused CPU tests | 26 passed |
 | real BF16 load/forward/generate | passed |
 | CPU oracle vs NPU tensors | 208 passed |
 | minimum logits cosine | 0.99996638 |
@@ -87,8 +88,11 @@ semantics, limits and evidence are documented in
 The broader adapter documentation imported with the source is retained as
 [`UPSTREAM_README.md`](UPSTREAM_README.md).
 
-W8/W4 execution remains experimental. The monorepo-level production policy and
-real-model latency evidence are documented in
+The public W8 speed policy is production-admitted only for the exact FP16
+910B3 stack, 7.2B FFN shapes, and logical rows B1/B4/B8. It reduces isolated
+active HBM to 71.48% of FP16 while measuring 1.020x-1.026x paired speedups.
+W4 and all other tuples remain experimental/fail-closed. Full quality,
+performance and limitation details are in
 [`../ASCEND_QUANT_ACCEPTANCE.md`](../ASCEND_QUANT_ACCEPTANCE.md).
 
 ## Provenance and license

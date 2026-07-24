@@ -122,8 +122,8 @@ The consolidated tree was rebuilt on the validated Ascend 910B3 environment:
 | shared W8/W4 quant layer | 19 passed, 4 skipped | import-safe shared module |
 
 The real 7.2B HF, vLLM, and SGLang acceptance artifacts remain in their
-component evidence directories. Quantized production admission remains
-fail-closed for the latency and quality reasons documented below.
+component evidence directories. HF W8 now has a narrow exact-stack production
+admission; shared vLLM/SGLang W8 and every W4 route remain fail-closed.
 
 ## Quick start
 
@@ -153,12 +153,12 @@ quant-only RWKV-7 FFN checkpoint and loader path for HF, vLLM, and SGLang.
 Packed payload is about 50% of FP16 for W8 and 26.6% for group-128 W4, with no
 hidden dense FP16 weight copy.
 
-Selected 910B3 row counts beat the same-shape FP16 matmul in the raw synchronized
-operator sweep. A real 7.2B all-FFN diagnostic reduced active HBM to 70.44% for
-W8 and 57.49% for W4, but paired decode was 0.9800x and 0.9756x FP16,
-respectively, and a near-tied greedy choice changed. Production admission is
-therefore empty and fail-closed; W8/W4 remain explicit experiments until a
-backend end-to-end artifact passes. See
+The public HF W8 path now passes a real 7.2B NPUGraph backend gate on the exact
+FP16 910B3 stack at B1/B4/B8: isolated active HBM is 71.48% of FP16 and median
+paired speed is 1.020x-1.026x FP16. Its five production prompts have identical
+greedy output, while a retained synthetic stress row discloses one rank-2
+near-tied flip. The shared quant-only loader used by vLLM/SGLang remains
+fail-closed, as does every W4 route. See
 [`ASCEND_QUANT_ACCEPTANCE.md`](ASCEND_QUANT_ACCEPTANCE.md).
 
 ## License

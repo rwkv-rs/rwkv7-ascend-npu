@@ -72,7 +72,11 @@ def ascend_graph_module_signature(
     signature: list[tuple[object, ...]] = []
     for name, module in owner.model.layers.named_modules():
         qweight = getattr(module, "qweight", None)
+        if not isinstance(qweight, torch.Tensor):
+            qweight = getattr(module, "q_weight", None)
         scales = getattr(module, "scales", None)
+        if not isinstance(scales, torch.Tensor):
+            scales = getattr(module, "scale", None)
         if not isinstance(qweight, torch.Tensor) or not qweight.numel():
             continue
         if not isinstance(scales, torch.Tensor) or not scales.numel():
