@@ -34,11 +34,27 @@ def test_configure_preserves_explicit_override(monkeypatch):
     assert values["RWKV7_NATIVE_MODEL_BACKEND"] == "native_jit"
 
 
-def test_rejects_cuda_graph_backend():
+def test_configure_native_graph_backend(monkeypatch):
     from rwkv7_hf.ascend_runtime import configure_ascend_defaults
 
-    with pytest.raises(ValueError, match="eager, native_jit, or auto"):
-        configure_ascend_defaults(backend="native_graph")
+    for name in list(os.environ):
+        if name.startswith("RWKV7_"):
+            monkeypatch.delenv(name, raising=False)
+    values = configure_ascend_defaults(backend="native_graph")
+    assert values["RWKV7_NATIVE_MODEL_BACKEND"] == "native_graph"
+    assert values["RWKV7_NATIVE_MODEL_JIT"] == "0"
+    assert values["RWKV7_NATIVE_GRAPH"] == "1"
+    assert values["RWKV7_NATIVE_PREFILL_GRAPH"] == "0"
+
+
+def test_rejects_unknown_ascend_backend():
+    from rwkv7_hf.ascend_runtime import configure_ascend_defaults
+
+    with pytest.raises(
+        ValueError,
+        match="eager, native_jit, native_graph, or auto",
+    ):
+        configure_ascend_defaults(backend="cuda_graph")
 
 
 def test_exact_stack_validation_has_no_substring_or_version_family_matching():

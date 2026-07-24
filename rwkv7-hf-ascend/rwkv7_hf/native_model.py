@@ -162,10 +162,42 @@ try:
     )
 except Exception:  # pragma: no cover - optional CUDA graph acceleration
     _NativeGraphRunner = None
-    _native_graph_available = lambda: False
-    _native_graph_cache_size = lambda: 8
-    _native_graph_runtime_signature = lambda: ()
-    _native_graph_stats_template = lambda: {"requests": 0, "hits": 0, "misses": 0, "evictions": 0}
+
+    def _native_graph_available():
+        return False
+
+    def _native_graph_cache_size():
+        return 8
+
+    def _native_graph_runtime_signature():
+        return ()
+
+    def _native_graph_stats_template():
+        return {"requests": 0, "hits": 0, "misses": 0, "evictions": 0}
+
+try:
+    from .ascend_graph_runtime import (
+        AscendGraphRunner as _AscendGraphRunner,
+        ascend_graph_available as _ascend_graph_available,
+        ascend_graph_cache_size as _ascend_graph_cache_size,
+        ascend_graph_module_signature as _ascend_graph_module_signature,
+        ascend_graph_runtime_signature as _ascend_graph_runtime_signature,
+    )
+except Exception:  # pragma: no cover - optional torch-npu graph acceleration
+    _AscendGraphRunner = None
+
+    def _ascend_graph_available():
+        return False
+
+    def _ascend_graph_cache_size():
+        return 3
+
+    def _ascend_graph_module_signature(owner):
+        del owner
+        return ()
+
+    def _ascend_graph_runtime_signature():
+        return ()
 
 try:  # pragma: no cover - Transformers version compatibility
     from transformers.cache_utils import Cache as _HFCache
@@ -2299,19 +2331,31 @@ class NativeRWKV7ForCausalLM(PreTrainedModel, GenerationMixin):
             return False
         if self._rwkv7_has_multi_cuda_device_map():
             return False
-        if self.training or torch.is_grad_enabled() or not _native_graph_available():
+        weight_device = self.model.embeddings.weight.device
+        graph_available = (
+            _native_graph_available()
+            if weight_device.type == "cuda"
+            else _ascend_graph_available()
+            if weight_device.type == "npu"
+            else False
+        )
+        if self.training or torch.is_grad_enabled() or not graph_available:
             return False
         if self._native_model_has_adapter_layers():
             return False
-        if self._native_model_quantized() and not self._native_model_native_quant_graph_safe():
+        if (
+            weight_device.type == "cuda"
+            and self._native_model_quantized()
+            and not self._native_model_native_quant_graph_safe()
+        ):
             return False
         if token_ids is None or token_ids.dim() != 2 or int(token_ids.shape[1]) != 1:
             return False
         if attention_mask is not None or output_hidden_states or not isinstance(cache, NativeRWKV7Cache):
             return False
-        if token_ids.device.type != "cuda" or self.model.embeddings.weight.device.type != "cuda":
+        if token_ids.device.type != weight_device.type:
             return False
-        if token_ids.device != self.model.embeddings.weight.device:
+        if token_ids.device != weight_device:
             return False
         if not cache.is_initialized or cache.get_batch_size() != int(token_ids.shape[0]):
             return False
@@ -2338,6 +2382,11 @@ class NativeRWKV7ForCausalLM(PreTrainedModel, GenerationMixin):
 
     def _native_graph_runner(self, batch_size: int):
         weight = self.model.embeddings.weight
+        if weight.device.type == "npu":
+            return NativeRWKV7ForCausalLM._native_graph_runner_current_device(
+                self,
+                batch_size,
+            )
         guard = _cuda_device_guard(weight.device)
         with guard:
             return NativeRWKV7ForCausalLM._native_graph_runner_current_device(
@@ -2346,22 +2395,43 @@ class NativeRWKV7ForCausalLM(PreTrainedModel, GenerationMixin):
             )
 
     def _native_graph_runner_current_device(self, batch_size: int):
-        if _NativeGraphRunner is None:
-            raise RuntimeError("native_graph runtime is unavailable")
-        packs = self._native_graph_packs()
         weight = self.model.embeddings.weight
-        key = (
-            weight.device.type,
-            weight.device.index,
-            weight.dtype,
-            len(packs),
-            int(packs[0][1]),
-            int(packs[0][2]),
-            str(getattr(self, "_rwkv7_native_mm_quantization", "none")),
-            int(getattr(self, "_rwkv7_native_mm_replaced_modules", 0)),
-            _native_graph_runtime_signature(),
-            int(batch_size),
-        )
+        if weight.device.type == "npu":
+            if _AscendGraphRunner is None:
+                raise RuntimeError("Ascend native_graph runtime is unavailable")
+            key = (
+                weight.device.type,
+                weight.device.index,
+                weight.dtype,
+                len(self.model.layers),
+                str(getattr(self, "_rwkv7_native_mm_quantization", "none")),
+                int(getattr(self, "_rwkv7_native_mm_replaced_modules", 0)),
+                _ascend_graph_module_signature(self),
+                _ascend_graph_runtime_signature(),
+                int(batch_size),
+            )
+            runner_cls = _AscendGraphRunner
+            cache_limit = _ascend_graph_cache_size()
+            runner_args = (self, int(batch_size))
+        else:
+            if _NativeGraphRunner is None:
+                raise RuntimeError("native_graph runtime is unavailable")
+            packs = self._native_graph_packs()
+            key = (
+                weight.device.type,
+                weight.device.index,
+                weight.dtype,
+                len(packs),
+                int(packs[0][1]),
+                int(packs[0][2]),
+                str(getattr(self, "_rwkv7_native_mm_quantization", "none")),
+                int(getattr(self, "_rwkv7_native_mm_replaced_modules", 0)),
+                _native_graph_runtime_signature(),
+                int(batch_size),
+            )
+            runner_cls = _NativeGraphRunner
+            cache_limit = _native_graph_cache_size()
+            runner_args = (self, packs, int(batch_size))
         cache = getattr(self, "_rwkv7_native_graph_runner_cache", None)
         if not isinstance(cache, OrderedDict):
             cache = OrderedDict()
@@ -2377,12 +2447,12 @@ class NativeRWKV7ForCausalLM(PreTrainedModel, GenerationMixin):
             cache.move_to_end(key)
             return runner
         stats["misses"] = int(stats.get("misses", 0)) + 1
-        while len(cache) >= _native_graph_cache_size():
+        while len(cache) >= cache_limit:
             _, evicted = cache.popitem(last=False)
             if hasattr(evicted, "detach_bound_cache"):
                 evicted.detach_bound_cache()
             stats["evictions"] = int(stats.get("evictions", 0)) + 1
-        runner = _NativeGraphRunner(self, packs, int(batch_size))
+        runner = runner_cls(*runner_args)
         cache[key] = runner
         return runner
 
@@ -2396,10 +2466,15 @@ class NativeRWKV7ForCausalLM(PreTrainedModel, GenerationMixin):
         stats = dict(getattr(self, "_rwkv7_native_graph_cache_stats", _native_graph_stats_template()))
         requests = int(stats.get("requests", 0))
         hits = int(stats.get("hits", 0))
+        graph_cache_limit = (
+            _ascend_graph_cache_size()
+            if self.model.embeddings.weight.device.type == "npu"
+            else _native_graph_cache_size()
+        )
         stats.update(
             {
                 "size": len(self.rwkv7_native_graph_cache_batch_sizes()),
-                "limit": _native_graph_cache_size(),
+                "limit": graph_cache_limit,
                 "batch_sizes": self.rwkv7_native_graph_cache_batch_sizes(),
                 "hit_rate": float(hits) / float(requests) if requests else None,
             }
@@ -2518,7 +2593,12 @@ class NativeRWKV7ForCausalLM(PreTrainedModel, GenerationMixin):
         warmed = {}
         for batch_size in sizes:
             chosen = requested
-            if chosen in {"auto", "native_graph"} and _native_graph_available():
+            graph_available = (
+                _ascend_graph_available()
+                if self.model.embeddings.weight.device.type == "npu"
+                else _native_graph_available()
+            )
+            if chosen in {"auto", "native_graph"} and graph_available:
                 self._native_graph_runner(batch_size)
                 chosen = "native_graph"
             elif chosen in {"auto", "native_jit"} and self._native_jit_packs() is not None:

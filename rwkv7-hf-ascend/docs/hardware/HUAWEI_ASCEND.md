@@ -32,8 +32,9 @@ metadata repair without changing source weights.
 
 The tiny row remains a compatibility smoke rather than a quality or throughput
 claim. A separate independent real-checkpoint gate is described below. Neither
-row establishes training convergence, graph capture, long-running stability or
-production serving throughput.
+row establishes training convergence, long-running stability or production
+serving throughput. Fixed-batch graph decode has its own real-checkpoint row
+below and does not change the scope of these earlier gates.
 
 ## Independent 7.2B CPU oracle and NPU alignment
 
@@ -144,8 +145,58 @@ print(tokenizer.decode(output[0]))
 `enable_ascend(..., backend="eager")` sets only fail-closed native flags and
 preserves explicit environment overrides. After eager correctness passes on an
 exact model/card/runtime row, `backend="native_jit"` enables the packed
-pure-PyTorch decode path. CUDA graph/Triton/FLA/bitsandbytes kernels are not
-silently selected on NPU.
+pure-PyTorch decode path. `backend="native_graph"` explicitly selects the
+fixed-batch torch-npu graph route described below. CUDA graph, Triton, FLA and
+bitsandbytes kernels are not silently selected on NPU.
+
+## Fixed-batch NPUGraph decode
+
+The native HF model can capture a complete single-token decode step with
+`torch.npu.NPUGraph`. Prefill remains on the ordinary native path. A runner owns
+fixed-address input, logits and recurrent-state buffers for one batch size;
+subsequent decode calls bind the HF cache to those graph-resident states and
+skip redundant state copies. Cache selection/reordering remains supported when
+the batch size stays fixed.
+
+```python
+info = enable_ascend("npu:0", backend="native_graph")
+model = AutoModelForCausalLM.from_pretrained(
+    model_dir,
+    trust_remote_code=True,
+    dtype=torch.float16,
+).eval().to(info.device)
+
+# Optional: pay capture cost before the first request for these fixed batches.
+model.rwkv7_warmup_fast_token((1, 4, 8), backend="native_graph")
+print(model.rwkv7_native_graph_cache_stats())
+```
+
+`RWKV7_ASCEND_GRAPH_CACHE_SIZE` controls the per-model LRU and defaults to
+three runners. Changing packed quantization buffers changes the graph cache key,
+which prevents a dense capture from being reused after module replacement.
+`model.rwkv7_clear_native_graph_cache()` explicitly detaches bound recurrent
+states and releases all cached runners.
+
+On the exact stack above, a real 7.2B FP16 `transformers.generate` gate decoded
+32 tokens per request after capture:
+
+| Fixed batch | Output tok/s | Scaling over B1 | Peak allocated HBM |
+|---:|---:|---:|---:|
+| 1 | 29.8664 | 1.0000x | 13.71 GiB |
+| 4 | 70.3739 | 2.3563x | 13.99 GiB |
+| 8 | 141.7044 | 4.7446x | 14.51 GiB |
+
+All three rows produced the exact expected `Hello` prefix `[45, 308, 459]`,
+reported `last_decode_backend=native_graph`, and passed the batch-scaling
+gates. The cache contained exactly `[1, 4, 8]`, with 121 hits from 124 requests.
+Graph-resident binding skipped 120 of 124 recurrent-state copies. The JSON,
+log, hashes and command are committed in
+`bench/ascend_910b3_graph_20260724/`.
+
+This evidence covers fixed-batch decode only. A new batch size incurs capture
+cost and consumes one LRU entry. Dynamic-shape capture, graph-captured prefill,
+quantized graph promotion, multi-NPU execution and long-duration stability
+remain separate acceptance gaps.
 
 ## Dynamic recurrent cache and chunked prefill
 
@@ -269,7 +320,7 @@ As of this evidence row, the repository has not established on this host:
 
 - official checkpoints other than this fixed 7.2B B1/B2 short-sequence gate;
 - PEFT/Trainer/TRL and real-checkpoint training on NPU (only tiny native backward/update passed);
-- NPU Graph capture in the canonical HF entry point;
+- dynamic-shape NPU Graph and graph-captured prefill (fixed-batch decode only);
 - paired prefill/decode throughput or long-duration serving stability;
 - whole-model W8/W4 with lower peak HBM and paired end-to-end speed not below FP16;
 - multi-NPU HCCL/device-map execution.

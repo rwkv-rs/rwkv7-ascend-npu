@@ -21,13 +21,20 @@ HELLO_GREEDY_PREFIX = [45, 308, 459]
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--model",
-        default="/data/models/fla-hub-rwkv7-7.2B-g0a",
-    )
+    parser.add_argument("--model", required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--new-tokens", type=int, default=16)
     parser.add_argument("--minimum-b4-scaling", type=float, default=1.25)
+    parser.add_argument(
+        "--backend",
+        choices=("eager", "native_graph"),
+        default="eager",
+    )
+    parser.add_argument(
+        "--dtype",
+        choices=("bfloat16", "float16"),
+        default="bfloat16",
+    )
     parser.add_argument(
         "--num-heads",
         type=int,
@@ -42,7 +49,11 @@ def main() -> None:
     if args.new_tokens < len(HELLO_GREEDY_PREFIX):
         raise ValueError("--new-tokens must be at least 3")
 
-    runtime = enable_ascend("npu:0", backend="eager")
+    runtime = enable_ascend("npu:0", backend=args.backend)
+    model_dtype = {
+        "bfloat16": torch.bfloat16,
+        "float16": torch.float16,
+    }[args.dtype]
     torch.npu.reset_peak_memory_stats()
     load_started = time.perf_counter()
     # Load the local FLA-free adapter class directly.  The source checkpoint's
@@ -56,7 +67,7 @@ def main() -> None:
     model = NativeRWKV7ForCausalLM.from_pretrained(
         args.model,
         config=model_config,
-        dtype=torch.bfloat16,
+        dtype=model_dtype,
         low_cpu_mem_usage=True,
     ).eval()
     load_cpu_s = time.perf_counter() - load_started
@@ -105,6 +116,11 @@ def main() -> None:
             "first_output_token_ids": generated_ids[0],
             "npu_allocated_bytes": torch.npu.memory_allocated(),
             "npu_peak_allocated_bytes": torch.npu.max_memory_allocated(),
+            "last_decode_backend": getattr(
+                model,
+                "_rwkv7_native_model_last_decode_backend",
+                None,
+            ),
         }
         print("E2E_ROW", json.dumps(row, sort_keys=True), flush=True)
         return row
@@ -134,14 +150,32 @@ def main() -> None:
             >= by_batch[4]["output_tokens_per_second"]
         ),
     }
+    graph_cache = (
+        model.rwkv7_native_graph_cache_stats()
+        if args.backend == "native_graph"
+        else None
+    )
+    graph_state_copy = (
+        model.rwkv7_native_graph_runner_copy_stats()
+        if args.backend == "native_graph"
+        else None
+    )
+    if args.backend == "native_graph":
+        gates["native_graph_used"] = all(
+            row["last_decode_backend"] == "native_graph" for row in rows
+        )
+        gates["native_graph_batch_cache"] = (
+            graph_cache is not None
+            and graph_cache["batch_sizes"] == [1, 4, 8]
+        )
     record = {
         "axis": "hf_ascend_real_7p2b_e2e_performance",
         "status": "PASS" if all(gates.values()) else "FAIL",
         "model": args.model,
         "hardware": runtime.device_name,
         "cann": runtime.cann_version,
-        "dtype": "bfloat16",
-        "backend": "transformers-generate-eager",
+        "dtype": args.dtype,
+        "backend": f"transformers-generate-{args.backend}",
         "config_repair": {
             "num_heads": args.num_heads,
             "head_dim": model_config.head_dim,
@@ -154,6 +188,8 @@ def main() -> None:
         "scaling_b4_over_b1": scaling_b4,
         "scaling_b8_over_b1": scaling_b8,
         "rows": rows,
+        "graph_cache": graph_cache,
+        "graph_state_copy": graph_state_copy,
         "gates": gates,
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
