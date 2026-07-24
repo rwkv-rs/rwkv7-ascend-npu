@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import json
 import shutil
 import sys
@@ -35,6 +36,12 @@ def test_committed_serving_evidence_passes_all_gates():
         "vllm",
         "sglang",
     ]
+    assert report["production_admission"]["thirty_minute_soak"] == [
+        "vllm",
+        "sglang",
+    ]
+    assert report["backends"]["vllm"]["soak"]["cycles"] == 1015
+    assert report["backends"]["sglang"]["soak"]["cycles"] == 978
     assert report["production_admission"]["quantized_serving"] == []
 
 
@@ -50,6 +57,35 @@ def test_corrupt_hashed_artifact_fails_closed(tmp_path):
     data["status"] = "FAIL"
     artifact.write_text(json.dumps(data))
     with pytest.raises(verifier.AcceptanceError, match="SHA256 mismatch"):
+        verifier.verify(target)
+
+
+def test_rehashed_failed_soak_still_fails_semantic_gate(tmp_path):
+    target = tmp_path / "repo"
+    for component in ("vllm-rwkv-ascend", "rwkv7-sglang-ascend"):
+        source = ROOT / component / "evidence" / "rebuild"
+        destination = target / component / "evidence" / "rebuild"
+        shutil.copytree(source, destination)
+    soak_source = ROOT / "benchmarks/results/serving_soak_20260724"
+    soak_target = target / "benchmarks/results/serving_soak_20260724"
+    shutil.copytree(soak_source, soak_target)
+    runner_target = target / "benchmarks/run_serving_soak.py"
+    runner_target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(ROOT / "benchmarks/run_serving_soak.py", runner_target)
+
+    artifact = soak_target / "sglang.json"
+    data = json.loads(artifact.read_text())
+    data["status"] = "FAIL"
+    artifact.write_text(json.dumps(data))
+    digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
+    sums = soak_target / "SHA256SUMS"
+    lines = [
+        f"{digest}  sglang.json" if line.endswith("  sglang.json") else line
+        for line in sums.read_text().splitlines()
+    ]
+    sums.write_text("\n".join(lines) + "\n")
+
+    with pytest.raises(verifier.AcceptanceError, match="soak status is not PASS"):
         verifier.verify(target)
 
 

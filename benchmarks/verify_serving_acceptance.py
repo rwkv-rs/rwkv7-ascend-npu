@@ -13,6 +13,7 @@ import hashlib
 import json
 import math
 import re
+import statistics
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +21,7 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 VLLM_EVIDENCE = ROOT / "vllm-rwkv-ascend" / "evidence" / "rebuild"
 SGLANG_EVIDENCE = ROOT / "rwkv7-sglang-ascend" / "evidence" / "rebuild"
+SOAK_EVIDENCE = ROOT / "benchmarks" / "results" / "serving_soak_20260724"
 EXPECTED_BATCHES = (1, 4, 8)
 EXPECTED_GREEDY_PREFIX = [45, 308, 459]
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -428,19 +430,273 @@ def _verify_sglang(expected_model: str, expected_hardware: str) -> dict[str, Any
     }
 
 
+def _soak_trace_summary(path: Path, backend: str) -> dict[str, Any]:
+    segments = 0
+    if backend == "vllm":
+        zero_events = 0
+        reused_events = 0
+        reused_slots: set[int] = set()
+        post_zero_failures = 0
+        with path.open(encoding="utf-8") as stream:
+            for line in stream:
+                event = json.loads(line)
+                if event.get("kind") == "soak_marker":
+                    segments += 1
+                elif event.get("event") == "fresh_state_zero":
+                    zero_events += 1
+                    if event.get("pre_zero_had_nonzero") is True:
+                        reused_events += 1
+                        reused_slots.add(int(event["slot"]))
+                    if event.get("post_zero_nonzero") is not False:
+                        post_zero_failures += 1
+        return {
+            "segment_count": segments,
+            "fresh_zero_events": zero_events,
+            "reused_nonzero_slots_before_clear": reused_events,
+            "reused_slot_ids": sorted(reused_slots),
+            "post_zero_failures": post_zero_failures,
+            "state_reuse_gate": reused_events > 0 and post_zero_failures == 0,
+        }
+
+    _require(backend == "sglang", f"unsupported soak backend: {backend}")
+    appearances: dict[int, int] = {}
+    fresh_slots: set[int] = set()
+    fresh_assignments = 0
+
+    def finish_segment() -> None:
+        nonlocal fresh_slots
+        for slot in fresh_slots:
+            appearances[slot] = appearances.get(slot, 0) + 1
+        fresh_slots = set()
+
+    with path.open(encoding="utf-8") as stream:
+        for line in stream:
+            event = json.loads(line)
+            if event.get("kind") == "soak_marker":
+                finish_segment()
+                segments += 1
+                continue
+            if event.get("kind") != "forward":
+                continue
+            prefixes = event.get("extend_prefix_lens")
+            if prefixes is None:
+                continue
+            for slot, prefix in zip(event.get("state_slot_ids") or [], prefixes):
+                if int(slot) >= 0 and int(prefix) == 0:
+                    fresh_slots.add(int(slot))
+    if fresh_slots:
+        finish_segment()
+        segments += 1
+    reused = sorted(slot for slot, count in appearances.items() if count >= 2)
+    fresh_assignments = sum(appearances.values())
+    return {
+        "segment_count": segments,
+        "fresh_slot_assignments": fresh_assignments,
+        "unique_fresh_slots": sorted(appearances),
+        "reused_slot_ids": reused,
+        "state_reuse_gate": bool(reused),
+    }
+
+
+def _soak_slope_per_hour(rows: list[dict[str, Any]]) -> float:
+    xs = [float(row["elapsed_s"]) for row in rows]
+    ys = [float(row["hbm_used_mb"]) for row in rows]
+    x_mean = statistics.fmean(xs)
+    y_mean = statistics.fmean(ys)
+    denominator = sum((value - x_mean) ** 2 for value in xs)
+    _require(denominator > 0, "soak HBM samples have no time span")
+    return sum((x - x_mean) * (y - y_mean) for x, y in zip(xs, ys)) / denominator * 3600
+
+
+def _verify_soak_backend(
+    backend: str, *, expected_model: str, expected_hardware: str
+) -> dict[str, Any]:
+    path = SOAK_EVIDENCE / f"{backend}.json"
+    artifact = _read_json(path)
+    _require(artifact.get("status") == "PASS", f"{path}: soak status is not PASS")
+    _require(artifact.get("backend") == backend, f"{path}: backend drift")
+    _require(artifact.get("model") == expected_model, f"{path}: model drift")
+    _require(artifact.get("hardware") == expected_hardware, f"{path}: hardware drift")
+    gates = artifact.get("gates")
+    _require(
+        isinstance(gates, dict)
+        and gates
+        and all(value is True for value in gates.values()),
+        f"{path}: at least one soak gate failed",
+    )
+    _require(
+        artifact.get("measured_duration_s", 0) >= 1800,
+        f"{path}: measured soak is shorter than 30 minutes",
+    )
+    rows = artifact.get("rows")
+    _require(isinstance(rows, list) and len(rows) >= 32, f"{path}: too few cycles")
+    _require(
+        artifact.get("cycle_count") == len(rows),
+        f"{path}: cycle count is inconsistent",
+    )
+    _require(
+        [row.get("cycle") for row in rows] == list(range(len(rows))),
+        f"{path}: cycle sequence is not contiguous",
+    )
+    _require(
+        {row.get("batch_size") for row in rows} == set(EXPECTED_BATCHES),
+        f"{path}: soak does not cover B1/B4/B8",
+    )
+    canonical = artifact.get("canonical_output_token_ids")
+    _require(
+        isinstance(canonical, list)
+        and canonical[:3] == EXPECTED_GREEDY_PREFIX
+        and len(canonical) == artifact.get("new_tokens_per_request"),
+        f"{path}: canonical output is invalid",
+    )
+    _require(
+        all(
+            row.get("exact_canonical_output") is True
+            and isinstance(row.get("output_tokens_per_second"), (int, float))
+            and math.isfinite(row["output_tokens_per_second"])
+            and row["output_tokens_per_second"] > 0
+            for row in rows
+        ),
+        f"{path}: invalid or inexact cycle",
+    )
+    _require(
+        artifact.get("request_count") == sum(int(row["batch_size"]) for row in rows),
+        f"{path}: request count is inconsistent",
+    )
+    _require(
+        artifact.get("generated_token_count")
+        == sum(int(row["output_tokens"]) for row in rows),
+        f"{path}: generated-token count is inconsistent",
+    )
+
+    hbm = artifact.get("hbm")
+    _require(isinstance(hbm, dict), f"{path}: HBM analysis missing")
+    _require(hbm.get("sample_count") == len(rows), f"{path}: HBM sample drift")
+    window = min(8, max(1, len(rows) // 4))
+    head = statistics.median(row["hbm_used_mb"] for row in rows[:window])
+    tail = statistics.median(row["hbm_used_mb"] for row in rows[-window:])
+    slope = _soak_slope_per_hour(rows)
+    for label, actual, recorded in (
+        ("head median", head, hbm.get("head_median_mb")),
+        ("tail median", tail, hbm.get("tail_median_mb")),
+        ("tail growth", tail - head, hbm.get("tail_growth_mb")),
+        ("linear slope", slope, hbm.get("linear_slope_mb_per_hour")),
+    ):
+        _require(
+            isinstance(recorded, (int, float))
+            and math.isclose(actual, recorded, rel_tol=1e-9, abs_tol=1e-9),
+            f"{path}: {label} is inconsistent",
+        )
+    _require(
+        tail - head <= hbm.get("max_growth_mb", -math.inf)
+        and slope <= hbm.get("max_slope_mb_per_hour", -math.inf),
+        f"{path}: recomputed HBM gate failed",
+    )
+
+    stability = artifact.get("throughput_stability")
+    _require(isinstance(stability, dict), f"{path}: throughput stability missing")
+    grouped: dict[int, list[dict[str, Any]]] = {
+        batch: [row for row in rows if row["batch_size"] == batch]
+        for batch in EXPECTED_BATCHES
+    }
+    for batch, batch_rows in grouped.items():
+        record = stability.get(str(batch))
+        _require(isinstance(record, dict), f"{path}: B{batch} stability missing")
+        throughput_window = min(8, max(1, len(batch_rows) // 4))
+        first = statistics.median(
+            row["output_tokens_per_second"] for row in batch_rows[:throughput_window]
+        )
+        last = statistics.median(
+            row["output_tokens_per_second"] for row in batch_rows[-throughput_window:]
+        )
+        ratio = last / first
+        _require(
+            math.isclose(
+                ratio,
+                record.get("tail_over_head", math.nan),
+                rel_tol=1e-9,
+                abs_tol=1e-9,
+            )
+            and ratio >= record.get("minimum_tail_ratio", math.inf),
+            f"{path}: B{batch} tail-throughput gate failed",
+        )
+
+    trace_summary = _soak_trace_summary(
+        SOAK_EVIDENCE / f"{backend}.trace.jsonl", backend
+    )
+    _require(
+        trace_summary == artifact.get("trace"),
+        f"{path}: scheduler trace summary is inconsistent",
+    )
+    reclaim = artifact.get("reclaim")
+    _require(
+        isinstance(reclaim, dict)
+        and reclaim.get("post_shutdown_hbm_mb", math.inf)
+        <= reclaim.get("initial_idle_hbm_mb", -math.inf)
+        + reclaim.get("tolerance_mb", -math.inf),
+        f"{path}: post-shutdown HBM reclaim failed",
+    )
+    return {
+        "status": "PASS",
+        "measured_duration_s": artifact["measured_duration_s"],
+        "cycles": artifact["cycle_count"],
+        "requests": artifact["request_count"],
+        "generated_tokens": artifact["generated_token_count"],
+        "hbm_head_median_mb": head,
+        "hbm_tail_median_mb": tail,
+        "hbm_slope_mb_per_hour": slope,
+        "post_shutdown_hbm_mb": reclaim["post_shutdown_hbm_mb"],
+        "reused_slot_ids": trace_summary["reused_slot_ids"],
+    }
+
+
+def _verify_soak(expected_model: str, expected_hardware: str) -> dict[str, Any]:
+    hashed = verify_sha256sums(SOAK_EVIDENCE)
+    required = {
+        "README.md",
+        "script.sha256",
+        "vllm.json",
+        "vllm.log",
+        "vllm.trace.jsonl",
+        "sglang.json",
+        "sglang.log",
+        "sglang.trace.jsonl",
+    }
+    _require(required <= set(hashed), "serving soak hash manifest is incomplete")
+    script_pin = (SOAK_EVIDENCE / "script.sha256").read_text(encoding="utf-8").split()
+    _require(
+        len(script_pin) == 2
+        and script_pin[1] == "benchmarks/run_serving_soak.py"
+        and script_pin[0] == _sha256(ROOT / script_pin[1]),
+        "serving soak runner does not match script.sha256",
+    )
+    return {
+        backend: _verify_soak_backend(
+            backend,
+            expected_model=expected_model,
+            expected_hardware=expected_hardware,
+        )
+        for backend in ("vllm", "sglang")
+    }
+
+
 def verify(root: Path | None = None) -> dict[str, Any]:
     """Return the consolidated serving report or raise ``AcceptanceError``."""
 
-    global ROOT, VLLM_EVIDENCE, SGLANG_EVIDENCE
-    previous = (ROOT, VLLM_EVIDENCE, SGLANG_EVIDENCE)
+    global ROOT, VLLM_EVIDENCE, SGLANG_EVIDENCE, SOAK_EVIDENCE
+    previous = (ROOT, VLLM_EVIDENCE, SGLANG_EVIDENCE, SOAK_EVIDENCE)
     try:
         if root is not None:
             ROOT = root.resolve()
             VLLM_EVIDENCE = ROOT / "vllm-rwkv-ascend" / "evidence" / "rebuild"
             SGLANG_EVIDENCE = ROOT / "rwkv7-sglang-ascend" / "evidence" / "rebuild"
+            SOAK_EVIDENCE = ROOT / "benchmarks" / "results" / "serving_soak_20260724"
 
         vllm = _verify_vllm()
         sglang = _verify_sglang(vllm["model"], vllm["hardware"])
+        soak = _verify_soak(vllm["model"], vllm["hardware"])
+        vllm["soak"] = soak["vllm"]
+        sglang["soak"] = soak["sglang"]
         return {
             "schema": "rwkv7-ascend-serving-acceptance-v1",
             "status": "PASS",
@@ -452,6 +708,7 @@ def verify(root: Path | None = None) -> dict[str, Any]:
                 "dynamic_batching": ["vllm", "sglang"],
                 "chunked_prefill": ["vllm", "sglang"],
                 "recurrent_state_cache": ["vllm", "sglang"],
+                "thirty_minute_soak": ["vllm", "sglang"],
                 "quantized_serving": [],
             },
             "fail_closed": {
@@ -461,7 +718,7 @@ def verify(root: Path | None = None) -> dict[str, Any]:
             },
         }
     finally:
-        ROOT, VLLM_EVIDENCE, SGLANG_EVIDENCE = previous
+        ROOT, VLLM_EVIDENCE, SGLANG_EVIDENCE, SOAK_EVIDENCE = previous
 
 
 def main() -> int:

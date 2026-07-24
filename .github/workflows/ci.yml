@@ -32,6 +32,6 @@ jobs:
       - name: rwkv7-sglang-ascend (WKV recurrence vs reference)
         run: cd rwkv7-sglang-ascend && PYTHONPATH=. python -m pytest tests/test_wkv_unit.py -v
       - name: serving evidence (vLLM/SGLang scheduler and fail-closed quant gates)
-        run: python -m pytest -q tests/test_serving_acceptance.py
+        run: python -m pytest -q tests/test_serving_acceptance.py tests/test_serving_soak.py
       - name: ascend-optimized (AscendC op-defs + cpp-forward structure)
         run: cd ascend-optimized && python -m pytest tests/test_artifacts.py -v
