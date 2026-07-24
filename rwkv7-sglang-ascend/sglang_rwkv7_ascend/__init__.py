@@ -34,6 +34,9 @@ def register() -> None:
         LinearAttnModelSpec(
             config_class=Rwkv7Config,
             backend_class_name="sglang_rwkv7_ascend.backend.Rwkv7AttnBackend",
+            hybrid_backend_class_name=(
+                "sglang_rwkv7_ascend.backend.Rwkv7HybridAttnBackend"
+            ),
             arch_names=["Rwkv7ForCausalLM", "RWKV7ForCausalLM"],
             uses_mamba_radix_cache=False,
             support_mamba_cache=True,

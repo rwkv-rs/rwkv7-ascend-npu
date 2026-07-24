@@ -99,6 +99,20 @@ cd vllm-rwkv-ascend && python serving/serve_full.py \
 
 See each subdir's README/docs for model dims, env vars, and the full feature set.
 
+## Ascend W8/W4 status
+
+[`rwkv7_ascend_quant.py`](rwkv7_ascend_quant.py) and
+[`rwkv7_ascend_model_quant.py`](rwkv7_ascend_model_quant.py) implement a shared,
+quant-only RWKV-7 FFN checkpoint and loader path for HF, vLLM, and SGLang.
+Packed payload is about 50% of FP16 for W8 and 26.6% for group-128 W4, with no
+hidden dense FP16 weight copy.
+
+Selected 910B3 row counts beat the same-shape FP16 matmul in the raw synchronized
+operator sweep, but prior module/model probes did **not** pass every speed and
+quality gate. Production admission is therefore empty and fail-closed; W8/W4
+remain explicit experiments until a backend end-to-end artifact passes. See
+[`ASCEND_QUANT_ACCEPTANCE.md`](ASCEND_QUANT_ACCEPTANCE.md).
+
 ## License
 
 Apache 2.0. Each subdir derives from upstream RWKV-7 projects

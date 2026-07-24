@@ -1,0 +1,137 @@
+diff --git a/python/sglang/srt/configs/linear_attn_model_registry.py b/python/sglang/srt/configs/linear_attn_model_registry.py
+index 33fdae8..07c066b 100644
+--- a/python/sglang/srt/configs/linear_attn_model_registry.py
++++ b/python/sglang/srt/configs/linear_attn_model_registry.py
+@@ -31,6 +31,9 @@ class LinearAttnModelSpec:
+
+     config_class: type
+     backend_class_name: str  # fully-qualified class name, lazily imported
++    # Optional lightweight wrapper for external backends that cannot import the
++    # built-in Mamba/GDN stack on their platform.
++    hybrid_backend_class_name: Optional[str] = None
+     arch_names: list[str] = field(default_factory=list)
+     uses_mamba_radix_cache: bool = True
+     support_mamba_cache: bool = True
+diff --git a/python/sglang/srt/layers/attention/attention_registry.py b/python/sglang/srt/layers/attention/attention_registry.py
+index 7b511bd..6ce2bbb 100644
+--- a/python/sglang/srt/layers/attention/attention_registry.py
++++ b/python/sglang/srt/layers/attention/attention_registry.py
+@@ -308,10 +308,6 @@ def attn_backend_wrapper(runner: "ModelRunner", full_attn_backend: "AttentionBac
+             return full_attn_backend
+
+         from sglang.kernels.ops.attention.fla.utils import check_environments
+-        from sglang.srt.layers.attention.linear.kda_backend import KDAAttnBackend
+-        from sglang.srt.layers.attention.linear.lightning_backend import (
+-            LightningAttentionBackend,
+-        )
+         from sglang.srt.layers.attention.linear.utils import (
+             initialize_linear_attn_config,
+         )
+@@ -321,7 +317,22 @@ def attn_backend_wrapper(runner: "ModelRunner", full_attn_backend: "AttentionBac
+             is_sm120_supported,
+         )
+
+-        if not is_npu():
++        # Registered external linear-attention models provide their own linear
++        # backend.  On NPU they must not be forced through the built-in Ascend
++        # Mamba/GDN imports: those imports require sgl_kernel_npu even when the
++        # external backend is implemented entirely with torch_npu operations.
++        custom_linear_spec = get_linear_attn_config(runner.model_config.hf_config)
++        if custom_linear_spec is not None:
++            spec, _ = custom_linear_spec
++            if spec.hybrid_backend_class_name is not None:
++                HybridLinearAttnBackend = import_backend_class(
++                    spec.hybrid_backend_class_name
++                )
++            else:
++                from sglang.srt.layers.attention.hybrid_linear_attn_backend import (
++                    HybridLinearAttnBackend,
++                )
++        elif not is_npu():
+             from sglang.srt.layers.attention.hybrid_linear_attn_backend import (
+                 HybridLinearAttnBackend,
+                 Mamba2AttnBackend,
+@@ -414,13 +425,18 @@ def attn_backend_wrapper(runner: "ModelRunner", full_attn_backend: "AttentionBac
+             else:
+                 linear_attn_backend = Mamba2AttnBackend(runner)
+         elif kimi_linear_config(runner.model_config) is not None:
++            from sglang.srt.layers.attention.linear.kda_backend import KDAAttnBackend
++
+             linear_attn_backend = KDAAttnBackend(runner)
+         elif hybrid_lightning_config(runner.model_config) is not None:
++            from sglang.srt.layers.attention.linear.lightning_backend import (
++                LightningAttentionBackend,
++            )
++
+             linear_attn_backend = LightningAttentionBackend(runner)
+         else:
+-            spec_result = get_linear_attn_config(runner.model_config.hf_config)
+-            if spec_result is not None:
+-                spec, _ = spec_result
++            if custom_linear_spec is not None:
++                spec, _ = custom_linear_spec
+                 BackendClass = import_backend_class(spec.backend_class_name)
+                 linear_attn_backend = BackendClass(runner)
+             else:
+diff --git a/python/sglang/srt/layers/layernorm.py b/python/sglang/srt/layers/layernorm.py
+index 66f5965..0707d81 100644
+--- a/python/sglang/srt/layers/layernorm.py
++++ b/python/sglang/srt/layers/layernorm.py
+@@ -159,7 +159,13 @@ logger = logging.getLogger(__name__)
+
+ if _is_npu:
+     import torch_npu
+-    from sgl_kernel_npu.norm.add_rmsnorm_bias import add_gemma_rms_norm
++    try:
++        from sgl_kernel_npu.norm.add_rmsnorm_bias import add_gemma_rms_norm
++    except ImportError:
++        def add_gemma_rms_norm(*args, **kwargs):
++            raise RuntimeError(
++                "Gemma NPU RMSNorm requires the optional sgl_kernel_npu package"
++            )
+
+
+ @lru_cache(maxsize=1)
+diff --git a/python/sglang/srt/mem_cache/pool_host/mha.py b/python/sglang/srt/mem_cache/pool_host/mha.py
+index 1af4bb9..45868f7 100644
+--- a/python/sglang/srt/mem_cache/pool_host/mha.py
++++ b/python/sglang/srt/mem_cache/pool_host/mha.py
+@@ -61,7 +61,17 @@ if _is_cuda or _is_hip:
+         transfer_kv_per_layer_ph_lf,
+     )
+ if _is_npu:
+-    from sgl_kernel_npu.kvcacheio import TransferDirection, transfer_kv_dim_exchange
++    try:
++        from sgl_kernel_npu.kvcacheio import TransferDirection, transfer_kv_dim_exchange
++    except ImportError:
++        # sgl_kernel_npu is optional for eager models that do not enable host KV
++        # cache/offload.  Fail only if that optional transfer path is invoked.
++        TransferDirection = None
++
++        def transfer_kv_dim_exchange(*args, **kwargs):
++            raise RuntimeError(
++                "NPU host KV cache requires the optional sgl_kernel_npu package"
++            )
+
+ logger = logging.getLogger(__name__)
+
+diff --git a/python/sglang/srt/mem_cache/pool_host/mla.py b/python/sglang/srt/mem_cache/pool_host/mla.py
+index bbfe420..906780d 100644
+--- a/python/sglang/srt/mem_cache/pool_host/mla.py
++++ b/python/sglang/srt/mem_cache/pool_host/mla.py
+@@ -43,6 +43,14 @@ if _is_cuda or _is_hip:
+         transfer_kv_per_layer_mla_pf_lf,
+     )
+ if _is_npu:
+-    from sgl_kernel_npu.kvcacheio import TransferDirection, transfer_kv_dim_exchange
++    try:
++        from sgl_kernel_npu.kvcacheio import TransferDirection, transfer_kv_dim_exchange
++    except ImportError:
++        TransferDirection = None
++
++        def transfer_kv_dim_exchange(*args, **kwargs):
++            raise RuntimeError(
++                "NPU host KV cache requires the optional sgl_kernel_npu package"
++            )
+
+ logger = logging.getLogger(__name__)

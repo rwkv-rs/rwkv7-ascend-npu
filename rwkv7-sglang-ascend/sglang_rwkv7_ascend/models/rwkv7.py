@@ -8,32 +8,11 @@ the WKV recurrence is our own kernel (via Rwkv7AttnBackend). Module /
 parameter names mirror the fla-format checkpoint so `load_weights` uses
 `default_weight_loader` with no remapping.
 
-M4 quantization: the linear projections (r/k/v/o_proj, ffn key/value) and the
-LoRA down/up projections are sglang quant-aware `ReplicatedLinear` (tp=1) threaded
-with `quant_config`. With `quant_config=None` they are unquantized `F.linear`
-(bit-identical to the previous `nn.Linear`, so greedy stays EXACT). With
-`--quantization w8a8_int8` (per-channel int8 weight, per-token dynamic int8
-activation, sgl_kernel `int8_scaled_mm`) the weights drop to int8 — VRAM halves
-and the int8 tensor cores keep decode at-least as fast as bf16 on Ampere. The WKV
-recurrence/state and the small per-channel params (x_*, k_k, k_a, r_k, g_norm)
-are NEVER quantized — they stay bf16/fp32.
-
-Tensor parallelism is head-parallel: head_dim stays whole and whole heads are
-split across ranks (r/k/v + LoRA-up column-parallel with no gather, per-channel
-params / g_norm / WKV state on the local head slice, o_proj and ffn.value
-row-parallel with a single allreduce each). The token-shift mix vectors and the
-conv (prev-token) state stay full-width — they act on the replicated hidden
-before the column-parallel projections. tp=1 keeps the exact original path.
-
-Pipeline parallelism partitions the layer stack into contiguous per-rank slices
-(llama-style make_layers + PPMissingLayer): the first rank owns the embeddings
-(+ ln0 inside layer 0), the last rank owns the final norm + lm_head, and stages
-hand off {hidden_states, v_first} as PPProxyTensors — v_first (layer 0's value
-projection, under tp>1 the LOCAL head slice) must ride along because every later
-layer's v-residual mix consumes it. Backend state stays indexed by GLOBAL
-layer_id; the mamba/linear-state pool allocates only this rank's layer slice
-(the runner filters by model.start_layer/end_layer). pp=1 keeps the exact
-original path.
+Production Ascend scope is tp=1/pp=1 bf16/fp16 eager inference.  The inherited
+TP/PP and SGLang quant_config plumbing remains in the module for future work but
+is not claimed without a hardware acceptance artifact. Legacy CUDA W4/W8 flags
+remain rejected on Ascend. The separate torch_npu FFN W8/W4 seam is default-off,
+manifest-controlled, and raw-kernel-candidate-only pending engine E2E evidence.
 
 Per-layer time-mix (att):
   shifted = prev_token(x);  x* = x + x_*·(shifted - x)
@@ -48,12 +27,26 @@ Per-layer time-mix (att):
 Channel-mix (ffn): shifted=prev(x); xk = x + x_k·(shifted-x); out = value(relu(key(xk))**2)
 """
 
+# NOTE FOR ASCEND DEPLOYMENTS: this file retains upstream CUDA optimization
+# implementations as checkpoint-layout/reference code, but every CUDA fast-path
+# gate is disabled by default.  The production Ascend path is bf16/fp16 eager.
+# Legacy RWKV_W4/RWKV_W8 environment flags fail explicitly below. The native
+# torch_npu FFN seam is implemented in sglang_rwkv7_ascend.ascend_quant and is
+# selected only by its explicit manifest environment contract.
+
 from typing import Iterable, Optional, Set, Tuple, Union
 
 import torch
 from torch import nn
 
 from sglang_rwkv7_ascend.configuration_rwkv7 import Rwkv7Config
+from sglang_rwkv7_ascend.ascend_quant import (
+    AscendPackedLinear,
+    AscendQuantActivation,
+    AscendQuantConfigError,
+    AscendQuantLoadError,
+    activate_quant_from_env,
+)
 from sglang.srt.distributed import (
     get_pp_group,
     get_tensor_model_parallel_rank,
@@ -211,6 +204,12 @@ _W4 = os.environ.get("RWKV_W4", "0") == "1"
 # bytes), and — unlike the cutlass w8a8 path (sm80–90 only) — JIT-builds and runs on
 # EVERY arch (Turing→Blackwell). Checkpoint from `bench/quant_w4.py --bits 8`.
 _W8 = os.environ.get("RWKV_W8", "0") == "1"
+
+if (_W4 or _W8) and not w4_linear.available():
+    raise RuntimeError(
+        "RWKV_W4/RWKV_W8 select legacy CUDA kernels and are unavailable on "
+        "Ascend; use the verified torch_npu weight-only quantization path instead"
+    )
 
 # M7 calibration: capture per-projection input Hessians (X^T X) for GPTQ. Env-gated,
 # zero cost when off. Run the fp16 model (RWKV_W4 off) through calibration prompts with
@@ -434,7 +433,7 @@ def _proj_gemv(layer, x: torch.Tensor, fast: bool) -> torch.Tensor:
     fast + M==1 + fp16 activation + fp16 contiguous weight + K%4==0 + N even."""
     if _CALIB and getattr(layer, "_qname", None):
         _calib_accumulate(layer._qname, x)
-    if isinstance(layer, (W4Linear, W8Linear)):
+    if isinstance(layer, (W4Linear, W8Linear, AscendPackedLinear)):
         return layer(x)
     if (
         fast
@@ -857,6 +856,7 @@ class Rwkv7FeedForward(nn.Module):
         layer_id: int,
         quant_config: Optional[QuantizationConfig] = None,
         prefix: str = "",
+        ascend_quant: AscendQuantActivation | None = None,
     ):
         super().__init__()
         self.layer_id = layer_id
@@ -864,14 +864,33 @@ class Rwkv7FeedForward(nn.Module):
         self.hidden_size = H
         inter = config.intermediate_size
         self.x_k = nn.Parameter(torch.zeros(H))
-        # tp>1: key is column-parallel (local inter slice; sqrelu is elementwise so
-        # it acts per-slice), value is row-parallel (allreduce restores the full H).
+        # Only selected FFN projections use the Ascend packed module. Every
+        # unselected projection keeps the byte-for-byte dense SGLang path.
         tp_size = _tp_size()
-        self.key = _make_proj(H, inter, quant_config, add_prefix("key", prefix))
-        self.value = _make_proj(inter, H, quant_config, add_prefix("value", prefix),
-                                parallel="row")
+        quant_key = (
+            ascend_quant.make_ffn_linear(layer_id, "key", H, inter)
+            if ascend_quant is not None else None
+        )
+        quant_value = (
+            ascend_quant.make_ffn_linear(layer_id, "value", inter, H)
+            if ascend_quant is not None else None
+        )
+        self.key = (
+            quant_key if quant_key is not None
+            else _make_proj(H, inter, quant_config, add_prefix("key", prefix))
+        )
+        self.value = (
+            quant_value if quant_value is not None
+            else _make_proj(
+                inter, H, quant_config, add_prefix("value", prefix), parallel="row"
+            )
+        )
+        self.key._qname = add_prefix("key", prefix)
+        self.value._qname = add_prefix("value", prefix)
         self._fast = (
             _FAST_LINEAR and (quant_config is None) and tp_size == 1
+            and not isinstance(self.key, AscendPackedLinear)
+            and not isinstance(self.value, AscendPackedLinear)
             and fast_linear.available()
         )
         # M6 sparse value-proj: eligible only unquantized tp=1 (not int8, not W4Linear;
@@ -880,6 +899,8 @@ class Rwkv7FeedForward(nn.Module):
         self._sparse = (
             _SPARSE_FFN and (quant_config is None) and tp_size == 1
             and not (_W4 or _W8)
+            and not isinstance(self.key, AscendPackedLinear)
+            and not isinstance(self.value, AscendPackedLinear)
         )
         self._value_tiled = None
 
@@ -933,6 +954,7 @@ class Rwkv7DecoderLayer(nn.Module):
         layer_id: int,
         quant_config: Optional[QuantizationConfig] = None,
         prefix: str = "",
+        ascend_quant: AscendQuantActivation | None = None,
     ):
         super().__init__()
         self.layer_id = layer_id
@@ -949,8 +971,11 @@ class Rwkv7DecoderLayer(nn.Module):
             prefix=add_prefix("attn", prefix),
         )
         self.ffn = Rwkv7FeedForward(
-            config, layer_id, quant_config=quant_config,
+            config,
+            layer_id,
+            quant_config=quant_config,
             prefix=add_prefix("ffn", prefix),
+            ascend_quant=ascend_quant,
         )
 
     def forward(
@@ -971,6 +996,7 @@ class Rwkv7Model(nn.Module):
         config: Rwkv7Config,
         quant_config: Optional[QuantizationConfig] = None,
         prefix: str = "",
+        ascend_quant: AscendQuantActivation | None = None,
     ):
         super().__init__()
         self.config = config
@@ -990,7 +1016,11 @@ class Rwkv7Model(nn.Module):
         self.layers, self.start_layer, self.end_layer = make_layers(
             config.num_hidden_layers,
             lambda idx, prefix: Rwkv7DecoderLayer(
-                config, idx, quant_config=quant_config, prefix=prefix
+                config,
+                idx,
+                quant_config=quant_config,
+                prefix=prefix,
+                ascend_quant=ascend_quant,
             ),
             pp_rank=self.pp_group.rank_in_group,
             pp_size=self.pp_group.world_size,
@@ -1125,7 +1155,36 @@ class Rwkv7ForCausalLM(nn.Module):
         self.config = config
         self.quant_config = quant_config
         self.pp_group = get_pp_group()
-        self.model = Rwkv7Model(config, quant_config, prefix=add_prefix("model", prefix))
+        self._ascend_quant = activate_quant_from_env(backend="sglang")
+        if self._ascend_quant is not None:
+            if quant_config is not None or _W4 or _W8:
+                raise AscendQuantConfigError(
+                    "native Ascend FFN quantization is mutually exclusive with "
+                    "SGLang quant_config and legacy CUDA RWKV_W4/RWKV_W8"
+                )
+            if prefix:
+                raise AscendQuantConfigError(
+                    "Ascend quant manifests use canonical unprefixed model paths"
+                )
+            if _tp_size() != 1 or self.pp_group.world_size != 1:
+                raise AscendQuantConfigError("Ascend FFN quantization currently requires TP=1/PP=1")
+        self.model = Rwkv7Model(
+            config,
+            quant_config,
+            prefix=add_prefix("model", prefix),
+            ascend_quant=self._ascend_quant,
+        )
+        if self._ascend_quant is not None:
+            self._ascend_quant.validate_construction(num_layers=config.num_hidden_layers)
+            ffn_dtypes = {
+                self.model.layers[layer].ffn.x_k.dtype
+                for layer, _ in self._ascend_quant.manifest.selected
+            }
+            if ffn_dtypes != {torch.float16}:
+                raise AscendQuantConfigError(
+                    "native Ascend FFN quantization requires SGLang --dtype half; "
+                    f"constructed FFN dtype(s)={sorted(map(str, ffn_dtypes))}"
+                )
         # lm_head exists on every pp rank (llama pattern; only the last rank uses
         # it — the logits_processor runs there).
         self.lm_head = ParallelLMHead(
@@ -1183,6 +1242,14 @@ class Rwkv7ForCausalLM(nn.Module):
         # W4Linear (RWKV_W4) stores int4 qweight + group scale as BUFFERS, not params —
         # include them so the .qweight/.scale checkpoint keys resolve.
         params_dict.update(dict(self.named_buffers()))
+        if self._ascend_quant is not None:
+            # Selected packed buffers are loaded by the authenticated manifest
+            # controller (or created from the source .weight); do not ask the
+            # generic SGLang loader to treat zero-sized constructor buffers as
+            # ordinary checkpoint tensors.
+            for module_path in self._ascend_quant.modules:
+                for component in ("qweight", "scales", "offsets"):
+                    params_dict.pop(f"{module_path}.{component}", None)
         tp_size = _tp_size()
         tp_rank = _tp_rank()
         # Head-sharded per-channel params (tp>1): the checkpoint stores the full
@@ -1192,6 +1259,14 @@ class Rwkv7ForCausalLM(nn.Module):
         loaded_params: Set[str] = set()
         pp_skipped = 0
         for name, loaded_weight in weights:
+            if self._ascend_quant is not None:
+                if self._ascend_quant.load_tensor(name, loaded_weight):
+                    loaded_params.add(name)
+                    continue
+                if self._ascend_quant.owns_selected_namespace(name):
+                    raise AscendQuantLoadError(
+                        f"checkpoint tensor violates Ascend quant manifest: {name}"
+                    )
             if name not in params_dict:
                 # pp>1: keys for another stage's slice (layers outside
                 # [start_layer, end_layer), the embeddings off the first rank,
@@ -1225,6 +1300,15 @@ class Rwkv7ForCausalLM(nn.Module):
             raise RuntimeError(
                 f"[rwkv7.load_weights] {len(missing)} params not loaded, e.g. "
                 f"{sorted(missing)[:8]}"
+            )
+        if self._ascend_quant is not None:
+            self.ascend_quant_status = self._ascend_quant.finish_load()
+            import sys
+            print(
+                f"[rwkv7] Ascend W{self._ascend_quant.manifest.bit} "
+                "raw-kernel-candidate seam active; production_accepted=false",
+                file=sys.stderr,
+                flush=True,
             )
         return loaded_params
 

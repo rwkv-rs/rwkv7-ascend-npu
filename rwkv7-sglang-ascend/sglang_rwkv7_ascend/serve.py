@@ -16,10 +16,17 @@ def main() -> None:
     # RWKV's recurrent state is carried by the MambaPool.  The custom no-op
     # backend avoids constructing an empty full-attention KV pool.
     if not any(a == "--attention-backend" or a.startswith("--attention-backend=") for a in sys.argv[1:]):
-        sys.argv.extend(["--attention-backend", "rwkv7_ascend"])
-    from sglang.launch_server import main as launch_main
+        # Reuse SGLang's accepted NPU backend name.  Plugin registration maps
+        # it to the all-linear no-op full-attention half in this process.
+        sys.argv.extend(["--attention-backend", "ascend"])
+    # The lightweight state backend intentionally supports eager scheduling;
+    # graph capture is disabled until its fixed-address replay path is verified.
+    if "--disable-cuda-graph" not in sys.argv[1:]:
+        sys.argv.append("--disable-cuda-graph")
+    from sglang.launch_server import run_server
+    from sglang.srt.server_args import prepare_server_args
 
-    launch_main()
+    run_server(prepare_server_args(sys.argv[1:]))
 
 
 if __name__ == "__main__":

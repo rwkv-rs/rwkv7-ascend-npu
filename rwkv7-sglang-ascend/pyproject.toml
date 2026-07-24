@@ -17,6 +17,9 @@ test = ["pytest>=8"]
 [project.scripts]
 sglang-rwkv7-ascend-serve = "sglang_rwkv7_ascend.serve:main"
 
+[project.entry-points."sglang.srt.plugins"]
+rwkv7_ascend = "sglang_rwkv7_ascend:register"
+
 [tool.setuptools.packages.find]
 include = ["sglang_rwkv7_ascend*"]
 

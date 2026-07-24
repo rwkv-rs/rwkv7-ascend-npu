@@ -9,3 +9,8 @@ build/
 dist/
 *.so
 *.egg-link
+
+# local install artifacts
+install-*.log
+install-*.pid
+compat-requirements.txt

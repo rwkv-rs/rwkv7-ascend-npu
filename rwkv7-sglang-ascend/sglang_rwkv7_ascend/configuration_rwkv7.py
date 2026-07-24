@@ -79,13 +79,15 @@ class Rwkv7Config(PretrainedConfig):
         use_cache=True,
         **kwargs,
     ):
-        if num_heads is None:
-            num_heads = hidden_size // head_dim
-        if hidden_size != num_heads * head_dim:
-            raise ValueError(
-                f"hidden_size={hidden_size} != num_heads*head_dim="
-                f"{num_heads * head_dim}"
-            )
+        if hidden_size % head_dim:
+            raise ValueError("hidden_size must be divisible by head_dim")
+        # Some released fla-hub RWKV-7 configs carry a stale num_heads value
+        # (7.2B-g0a says 32 while its r_k[64,64] and 4096-channel projections
+        # encode 64 WKV heads).  The checkpoint's actual geometry is always
+        # hidden_size // head_dim, matching the reference FLA layer.
+        derived_num_heads = hidden_size // head_dim
+        if num_heads is None or num_heads != derived_num_heads:
+            num_heads = derived_num_heads
         self.vocab_size = vocab_size
         self.hidden_size = hidden_size
         self.num_hidden_layers = num_hidden_layers

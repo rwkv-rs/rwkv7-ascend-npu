@@ -1,0 +1,86 @@
+{
+  "bits": {
+    "4": {
+      "batches": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8
+      ],
+      "count": 16,
+      "max_speedup": 1.739460327000658,
+      "max_storage_ratio": 0.265625,
+      "min_cosine": 0.9929672479629517,
+      "min_speedup": 1.0348689791029284,
+      "shapes": [
+        [
+          4096,
+          16384
+        ],
+        [
+          16384,
+          4096
+        ]
+      ]
+    },
+    "8": {
+      "batches": [
+        17,
+        18,
+        19,
+        20,
+        21,
+        22,
+        23,
+        24,
+        25,
+        26,
+        27,
+        28
+      ],
+      "count": 24,
+      "max_speedup": 1.5207382278926238,
+      "max_storage_ratio": 0.500244140625,
+      "min_cosine": 0.9999551773071289,
+      "min_speedup": 1.0242091816184526,
+      "shapes": [
+        [
+          4096,
+          16384
+        ],
+        [
+          16384,
+          4096
+        ]
+      ]
+    }
+  },
+  "environment": {
+    "device": "Ascend910B3",
+    "iters": 150,
+    "kind": "environment",
+    "python": "3.11.14",
+    "rounds": 5,
+    "torch": "2.9.0+cpu",
+    "torch_npu": "2.9.0",
+    "warmup": 30
+  },
+  "errors": [],
+  "passed": true,
+  "source": "benchmarks/results/ascend910b3_quant_sweep_20260724.jsonl",
+  "thresholds": {
+    "max_storage_ratio": {
+      "4": 0.28,
+      "8": 0.51
+    },
+    "min_cosine": {
+      "4": 0.992,
+      "8": 0.9999
+    },
+    "min_speedup": 1.02
+  }
+}

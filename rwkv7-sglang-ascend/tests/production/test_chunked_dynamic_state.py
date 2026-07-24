@@ -6,6 +6,7 @@ import pytest
 import torch
 
 from sglang_rwkv7_ascend.kernels.wkv import wkv_recurrent
+from sglang_rwkv7_ascend.configuration_rwkv7 import Rwkv7Config
 from sglang_rwkv7_ascend.state_cache import SGLangMambaPoolStateAdapter
 
 
@@ -117,3 +118,12 @@ def test_reserved_padding_slot_is_never_user_state():
     adapter = SGLangMambaPoolStateAdapter(_Pool())
     with pytest.raises(ValueError, match="reserved"):
         adapter.clear([0])
+
+
+def test_legacy_7b_config_normalizes_checkpoint_head_geometry():
+    cfg = Rwkv7Config(hidden_size=4096, num_heads=32, head_dim=64)
+    assert cfg.num_heads == 64
+    assert cfg.num_attention_heads == 64
+    assert cfg.num_key_value_heads == 64
+    assert cfg.head_dim == 64
+    assert cfg.mamba2_cache_params.shape.temporal == (64, 64, 64)

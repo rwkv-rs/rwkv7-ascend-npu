@@ -21,6 +21,11 @@ def main():
         ["git", "-C", str(sgl_root), "rev-parse", "HEAD"], text=True
     ).strip()
     assert actual == pins["SGLANG_COMMIT"], (actual, pins["SGLANG_COMMIT"])
+    cann_root = Path("/usr/local/Ascend/ascend-toolkit/latest").resolve()
+    assert cann_root.name == f"cann-{pins['CANN_VERSION']}", (
+        cann_root,
+        pins["CANN_VERSION"],
+    )
 
     import torch
     import torch_npu  # noqa: F401
@@ -36,11 +41,15 @@ def main():
     assert params.shape.conv == [(256, 1), (256, 1)]
     assert params.shape.temporal == (4, 64, 64)
     assert params.dtype.temporal == torch.float32
+    device_name = torch_npu.npu.get_device_name(0)
+    assert device_name == pins["NPU_DEVICE_NAME"], (device_name, pins["NPU_DEVICE_NAME"])
     print(json.dumps({
         "sglang_commit": actual,
         "torch": torch.__version__,
         "torch_npu": torch_npu.__version__,
+        "cann": cann_root.name,
         "npu_available": bool(torch.npu.is_available()),
+        "npu_device": device_name,
         "plugin": "ok",
     }, indent=2))
 

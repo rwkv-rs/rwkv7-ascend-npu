@@ -4,9 +4,10 @@
 Ascend port of Hakureirm/rwkv-sglang's CUDA backend (reference/hakureirm/
 rwkv7_backend.py). Differences vs the CUDA original:
 
-  * Base class is ``AscendMambaAttnBackendBase`` (NPU metadata/cuda-graph plumbing)
-    instead of the CUDA ``MambaAttnBackendBase``.
-  * The WKV recurrence calls the pure-torch ``ascend_port.wkv.wkv_recurrent``
+  * A small scheduler-metadata backend replaces SGLang's built-in Mamba class.
+    It deliberately avoids importing ``sgl_kernel_npu``: current upstream
+    kernel wheels target Atlas A3 and are not a dependency on Atlas A2/910B.
+  * The WKV recurrence calls ``kernels.wkv.wkv_recurrent``
     (M1a/M1c token-exact on 910B3) instead of the FLA-free triton kernel. Our
     kernel has no in-place indexed-state mode, so both decode and extend use the
     gather / compute / scatter pattern on ``temporal``.
@@ -15,13 +16,20 @@ rwkv7_backend.py). Differences vs the CUDA original:
 
 The model calls ``token_shift(...)`` and ``recurrence(...)`` directly on this
 backend instance (obtained via ``forward_batch.attn_backend.linear_attn_backend``),
-bypassing HybridLinearAttnBackend.forward. ``init_forward_metadata`` still runs
-through HybridLinearAttnBackend, populating ``self.forward_metadata``
+bypassing wrapper ``forward``. ``init_forward_metadata`` runs through the
+lightweight wrapper, populating ``self.forward_metadata``
 (query_start_loc + mamba_cache_indices) normally. State lives in the MambaPool:
 conv[0]/conv[1] = the two width-2 token-shift states (attn/ffn); temporal = the
 WKV recurrent state S [size+1, H, K, V] fp32.
 """
-from typing import Optional
+from __future__ import annotations
+
+from dataclasses import dataclass
+import json
+import os
+from pathlib import Path
+import time
+from typing import TYPE_CHECKING, Optional
 
 import torch
 
@@ -33,11 +41,59 @@ except Exception:
     from sglang_rwkv7_ascend.kernels.wkv import wkv_recurrent
 from sglang.srt.layers.attention.base_attn_backend import AttentionBackend
 from sglang.srt.layers.attention.attention_registry import register_attention_backend
-from sglang.srt.hardware_backend.npu.attention.ascend_hybrid_linear_attn_backend import (
-    AscendMambaAttnBackendBase,
-)
-from sglang.srt.model_executor.forward_batch_info import ForwardBatch
-from sglang.srt.model_executor.model_runner import ModelRunner
+if TYPE_CHECKING:
+    from sglang.srt.model_executor.forward_batch_info import ForwardBatch
+    from sglang.srt.model_executor.model_runner import ModelRunner
+
+
+@dataclass
+class Rwkv7ForwardMetadata:
+    query_start_loc: torch.Tensor
+    mamba_cache_indices: torch.Tensor
+
+
+def _acceptance_trace(forward_batch, metadata: Rwkv7ForwardMetadata) -> None:
+    """Append scheduler/state evidence only when explicitly enabled.
+
+    This intentionally performs device-to-host copies and must never be enabled
+    for normal serving or performance measurements.
+    """
+    path = os.environ.get("RWKV_SGLANG_ACCEPTANCE_TRACE")
+    if not path:
+        return
+
+    def values(tensor):
+        if tensor is None:
+            return None
+        if not isinstance(tensor, torch.Tensor):
+            return list(tensor)
+        return tensor.detach().cpu().reshape(-1).tolist()
+
+    mode = forward_batch.forward_mode
+    event = {
+        "kind": "forward",
+        "time_ns": time.time_ns(),
+        "pid": os.getpid(),
+        "mode": getattr(mode, "name", str(mode)),
+        "batch_size": int(forward_batch.batch_size),
+        "real_batch_size": int(
+            getattr(forward_batch, "_original_batch_size", None)
+            or forward_batch.batch_size
+        ),
+        "request_pool_indices": values(forward_batch.req_pool_indices),
+        "state_slot_ids": values(metadata.mamba_cache_indices),
+        "query_start_loc": values(metadata.query_start_loc),
+        "extend_prefix_lens": values(
+            getattr(forward_batch, "extend_prefix_lens", None)
+        ),
+        "extend_seq_lens": values(
+            getattr(forward_batch, "extend_seq_lens", None)
+        ),
+    }
+    trace = Path(path)
+    trace.parent.mkdir(parents=True, exist_ok=True)
+    with trace.open("a", encoding="utf-8") as stream:
+        stream.write(json.dumps(event, separators=(",", ":")) + "\n")
 
 
 class Rwkv7NoOpFullAttnBackend(AttentionBackend):
@@ -58,6 +114,7 @@ class Rwkv7NoOpFullAttnBackend(AttentionBackend):
             self.req_to_token_pool = model_runner.req_to_token_pool
             self.token_to_kv_pool = getattr(model_runner, "token_to_kv_pool", None)
             self.max_context_len = model_runner.model_config.context_len
+            self.data_type = getattr(model_runner, "dtype", torch.float32)
 
     def init_forward_metadata(self, forward_batch: ForwardBatch):
         pass
@@ -100,13 +157,76 @@ class Rwkv7NoOpFullAttnBackend(AttentionBackend):
 
 
 @register_attention_backend("rwkv7_ascend")
+@register_attention_backend("ascend")
 def create_rwkv7_noop_backend(runner):
     """Full-attention half of SGLang's hybrid wrapper (RWKV has none)."""
 
     return Rwkv7NoOpFullAttnBackend(runner)
 
 
-class Rwkv7AttnBackend(AscendMambaAttnBackendBase):
+class Rwkv7HybridAttnBackend(AttentionBackend):
+    """Lightweight all-linear wrapper with no sgl_kernel_npu imports."""
+
+    def __init__(self, full_attn_backend, linear_attn_backend, full_attn_layers):
+        if full_attn_layers:
+            raise ValueError("RWKV-7 must not contain full-attention layers")
+        self.full_attn_layers = full_attn_layers
+        self.full_attn_backend = full_attn_backend
+        self.linear_attn_backend = linear_attn_backend
+        self.attn_backend_list = [full_attn_backend, linear_attn_backend]
+        self.token_to_kv_pool = full_attn_backend.token_to_kv_pool
+        self.req_to_token_pool = full_attn_backend.req_to_token_pool
+        self.max_context_len = full_attn_backend.max_context_len
+        self.needs_cpu_seq_lens = False
+
+    @property
+    def data_type(self):
+        return self.full_attn_backend.data_type
+
+    def init_forward_metadata(self, forward_batch):
+        for backend in self.attn_backend_list:
+            backend.init_forward_metadata(forward_batch)
+
+    def init_forward_metadata_out_graph(self, forward_batch, in_capture=False):
+        for backend in self.attn_backend_list:
+            backend.init_forward_metadata_out_graph(
+                forward_batch, in_capture=in_capture
+            )
+
+    def init_forward_metadata_in_graph(self, forward_batch):
+        for backend in self.attn_backend_list:
+            backend.init_forward_metadata_in_graph(forward_batch)
+
+    def on_after_cuda_graph_warmup(self):
+        for backend in self.attn_backend_list:
+            backend.on_after_cuda_graph_warmup()
+
+    def init_cuda_graph_state(self, max_bs, max_num_tokens):
+        for backend in self.attn_backend_list:
+            backend.init_cuda_graph_state(max_bs, max_num_tokens)
+
+    def init_cpu_graph_state(self, max_bs, max_num_tokens):
+        for backend in self.attn_backend_list:
+            backend.init_cpu_graph_state(max_bs, max_num_tokens)
+
+    def init_forward_metadata_capture_cpu_graph(self, *args, **kwargs):
+        for backend in self.attn_backend_list:
+            backend.init_forward_metadata_capture_cpu_graph(*args, **kwargs)
+
+    def get_cuda_graph_seq_len_fill_value(self):
+        return 1
+
+    def get_cpu_graph_seq_len_fill_value(self):
+        return 1
+
+    def forward_decode(self, *args, **kwargs):
+        return self.linear_attn_backend.forward_decode(*args, **kwargs)
+
+    def forward_extend(self, *args, **kwargs):
+        return self.linear_attn_backend.forward_extend(*args, **kwargs)
+
+
+class Rwkv7AttnBackend(AttentionBackend):
     """Linear-attention backend for RWKV-7 on Ascend NPU.
 
     Both decode and extend run through the pure-torch ``ascend_port.wkv.
@@ -114,14 +234,84 @@ class Rwkv7AttnBackend(AscendMambaAttnBackendBase):
     the oracle (no r-scaling before GroupNorm).
     """
 
-    def __init__(self, model_runner: ModelRunner):
-        super().__init__(model_runner)
+    needs_cpu_seq_lens = False
+
+    def __init__(self, model_runner: "ModelRunner"):
+        super().__init__()
+        self.device = model_runner.device
+        self.req_to_token_pool = model_runner.req_to_token_pool
+        self.token_to_kv_pool = model_runner.token_to_kv_pool
+        self.forward_metadata: Optional[Rwkv7ForwardMetadata] = None
         # conv[0] shape = (num_layers, size+1, hidden, 1)
         # MambaAttnBackendBase interprets the last dimension as conv history.
         # Ascend physically stores conv as [slot, history, hidden], so exposing
         # the physical shape here would mistake ``hidden`` for history.
         self.conv_states_shape = (model_runner.model_config.hidden_size, 1)
         self.scale = 1.0
+
+    def _make_metadata(self, forward_batch: "ForwardBatch") -> Rwkv7ForwardMetadata:
+        indices = self.req_to_token_pool.get_mamba_indices(
+            forward_batch.req_pool_indices
+        )
+        translate = getattr(self.req_to_token_pool, "translate_mamba_indices", None)
+        if translate is not None:
+            indices = translate(indices)
+        real_bs = getattr(forward_batch, "_original_batch_size", None)
+        if real_bs is not None and real_bs < indices.shape[0]:
+            indices = indices.clone()
+            indices[real_bs:] = -1
+
+        bs = forward_batch.batch_size
+        if forward_batch.forward_mode.is_decode_or_idle():
+            qsl = torch.arange(0, bs + 1, dtype=torch.int32, device=self.device)
+        elif forward_batch.forward_mode.is_extend(include_draft_extend_v2=True):
+            if forward_batch.forward_mode.is_draft_extend_v2():
+                raise NotImplementedError("RWKV-7 speculative draft extend is disabled")
+            qsl = torch.empty((bs + 1,), dtype=torch.int32, device=self.device)
+            qsl[:bs] = forward_batch.extend_start_loc
+            qsl[bs] = (
+                forward_batch.extend_start_loc[-1]
+                + forward_batch.extend_seq_lens[-1]
+            )
+        else:
+            raise ValueError(f"Unsupported RWKV-7 forward mode: {forward_batch.forward_mode}")
+        metadata = Rwkv7ForwardMetadata(qsl, indices)
+        _acceptance_trace(forward_batch, metadata)
+        return metadata
+
+    def init_forward_metadata(self, forward_batch: "ForwardBatch"):
+        self.forward_metadata = self._make_metadata(forward_batch)
+
+    def init_forward_metadata_out_graph(
+        self, forward_batch: "ForwardBatch", in_capture: bool = False
+    ):
+        # Production launch disables graph capture.  Keeping this eager hook
+        # makes scheduler metadata refresh correctly during ordinary replay.
+        self.forward_metadata = self._make_metadata(forward_batch)
+
+    def init_forward_metadata_in_graph(self, forward_batch: "ForwardBatch"):
+        pass
+
+    def init_cuda_graph_state(self, max_bs: int, max_num_tokens: int):
+        pass
+
+    def init_cpu_graph_state(self, max_bs: int, max_num_tokens: int):
+        pass
+
+    def init_forward_metadata_capture_cpu_graph(self, *args, **kwargs):
+        pass
+
+    def get_cuda_graph_seq_len_fill_value(self):
+        return 1
+
+    def get_cpu_graph_seq_len_fill_value(self):
+        return 1
+
+    def forward_decode(self, *args, **kwargs):
+        raise NotImplementedError("RWKV model calls recurrence() directly")
+
+    def forward_extend(self, *args, **kwargs):
+        raise NotImplementedError("RWKV model calls recurrence() directly")
 
     # ---- token-shift (width-2 causal shift via the conv state) ----
     def token_shift(
