@@ -1,0 +1,84 @@
+{
+  "archive_normalization": "sorted-zip-stored-v1",
+  "build_backend": "setuptools==79.0.1",
+  "build_frontend": "build==1.3.0",
+  "schema": "rwkv7-ascend-wheel-release-v1",
+  "source_date_epoch": 1784894901,
+  "status": "PASS",
+  "wheel_tool": "wheel==0.46.3",
+  "wheels": [
+    {
+      "archive_file_count": 119,
+      "bytes": 2355116,
+      "distribution": "rwkv7-hf-adapter",
+      "entry_points": {},
+      "filename": "rwkv7_hf_adapter-0.6.0-py3-none-any.whl",
+      "install_smoke": {
+        "entry_points": {},
+        "installed_from_wheel": true,
+        "module": "rwkv7_hf",
+        "passed": true
+      },
+      "pure_python": true,
+      "requires_python": ">=3.10",
+      "sha256": "e4f39fbcb3677d463de4a0a847102f4cded14b3eb7653a56f47b2bc717e16ea8",
+      "source_tree_sha256": "8c368c43fc83514a054d70ddf6b189e61dd277caecedaa4f49fcf2fe14c56d5b",
+      "tag": "py3-none-any",
+      "version": "0.6.0"
+    },
+    {
+      "archive_file_count": 11,
+      "bytes": 88627,
+      "distribution": "rwkv7-vllm-ascend",
+      "entry_points": {
+        "vllm.general_plugins": {
+          "rwkv7_ascend_model": "rwkv7_vllm_ascend.plugin:register"
+        }
+      },
+      "filename": "rwkv7_vllm_ascend-0.3.0-py3-none-any.whl",
+      "install_smoke": {
+        "entry_points": {
+          "vllm.general_plugins:rwkv7_ascend_model": "rwkv7_vllm_ascend.plugin:register"
+        },
+        "installed_from_wheel": true,
+        "module": "rwkv7_vllm_ascend",
+        "passed": true
+      },
+      "pure_python": true,
+      "requires_python": "<3.12,>=3.10",
+      "sha256": "4e5fb76894ee706f38a6b02fc324bd84b0d84345f09fc711223a1c7897d3272a",
+      "source_tree_sha256": "0629f66a345ebc832bd3b09ad715f64c934168af07dc678102d28ce760e4bd66",
+      "tag": "py3-none-any",
+      "version": "0.3.0"
+    },
+    {
+      "archive_file_count": 16,
+      "bytes": 152102,
+      "distribution": "sglang-rwkv7-ascend",
+      "entry_points": {
+        "console_scripts": {
+          "sglang-rwkv7-ascend-serve": "sglang_rwkv7_ascend.serve:main"
+        },
+        "sglang.srt.plugins": {
+          "rwkv7_ascend": "sglang_rwkv7_ascend:register"
+        }
+      },
+      "filename": "sglang_rwkv7_ascend-0.2.0-py3-none-any.whl",
+      "install_smoke": {
+        "entry_points": {
+          "console_scripts:sglang-rwkv7-ascend-serve": "sglang_rwkv7_ascend.serve:main",
+          "sglang.srt.plugins:rwkv7_ascend": "sglang_rwkv7_ascend:register"
+        },
+        "installed_from_wheel": true,
+        "module": "sglang_rwkv7_ascend",
+        "passed": true
+      },
+      "pure_python": true,
+      "requires_python": ">=3.10",
+      "sha256": "587ed56aac60e36b565cb5ec33d82f85018f344bb2c85075ec81cd381edfe9bb",
+      "source_tree_sha256": "ea28d469190cc1eb4ebaf4480994455dfa1ff731257e6567abe272916b6adc36",
+      "tag": "py3-none-any",
+      "version": "0.2.0"
+    }
+  ]
+}
