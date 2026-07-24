@@ -8,7 +8,7 @@ version = "0.2.0"
 description = "Out-of-tree RWKV-7 recurrent model backend for SGLang on Ascend"
 readme = "README.md"
 requires-python = ">=3.10"
-license = {text = "Apache-2.0"}
+license = "Apache-2.0"
 dependencies = ["torch>=2.9,<2.10", "transformers==5.12.1"]
 
 [project.optional-dependencies]

@@ -1,0 +1,56 @@
+{
+  "schema": "rwkv7-ascend-wheel-hardware-smoke-v1",
+  "status": "PASS",
+  "scope": "isolated wheel install, import, entry-point registration and NPU discovery",
+  "hardware": {
+    "device": "Ascend910B3",
+    "npu_available": true,
+    "npu_smi": "25.5.0",
+    "hbm_total_mib": 65536
+  },
+  "runtime": {
+    "cann": "8.5.0",
+    "torch": "2.9.0+cpu",
+    "torch_npu": "2.9.0"
+  },
+  "install": {
+    "isolated_target": true,
+    "pip_no_deps": true,
+    "module_origin_asserted_inside_target": true
+  },
+  "components": [
+    {
+      "component": "hugging-face",
+      "distribution": "rwkv7-hf-adapter",
+      "version": "0.6.0",
+      "sha256": "baf1bee42f2c3c77a8694cdee7dff8a5e9e6d749b56ed0e2f9d504e4db3a7c3f",
+      "import": "PASS",
+      "ascend_runtime_discovery": "PASS"
+    },
+    {
+      "component": "vllm",
+      "distribution": "rwkv7-vllm-ascend",
+      "version": "0.3.0",
+      "engine_version": "0.18.0",
+      "sha256": "1d8c0ff751e1d2d91672197b1880e580d1110965d34ae3fd4dbe2475903ab729",
+      "import": "PASS",
+      "entry_point_registration": "PASS",
+      "architectures": [
+        "NativeRWKV7ForCausalLM",
+        "RWKV7ForCausalLM",
+        "Rwkv7ForCausalLM"
+      ]
+    },
+    {
+      "component": "sglang",
+      "distribution": "sglang-rwkv7-ascend",
+      "version": "0.2.0",
+      "engine_commit": "d0b9689805232d8ab37789121cbc3b766b5c723e",
+      "sha256": "a59d923ab41afdba3141ce8edfb15d3131c18e864b20f92fecf253a089ea3ead",
+      "import": "PASS",
+      "entry_point_registration": "PASS",
+      "linear_attention_registry": "PASS",
+      "recurrent_cache_contract": "PASS"
+    }
+  ]
+}

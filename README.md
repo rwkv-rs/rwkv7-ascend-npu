@@ -135,6 +135,20 @@ growth, bounded memory slope, recurrent-slot reuse, and HBM reclaim after
 shutdown. Full artifacts are in
 [`benchmarks/results/serving_soak_20260724/`](benchmarks/results/serving_soak_20260724/).
 
+## Release wheels
+
+The three integration layers are available as deterministic, inspected
+`py3-none-any` wheels in [`release/2026.07.24/`](release/2026.07.24/). The
+release manifest records source digests, wheel metadata, entry points, complete
+`RECORD` verification, and isolated install smoke. CI rebuilds the wheels with
+pinned build tooling and requires byte-for-byte equality with the committed
+artifacts.
+
+These wheels package the Python integrations only; install the matching CANN,
+`torch_npu`, and engine runtime separately. The same fail-closed admission
+boundary applies: HF W8 is admitted only on the exact evidenced stack, while HF
+W4 and vLLM/SGLang quantized serving are not enabled.
+
 ## Quick start
 
 On a 910B3 box (CANN 8.5.0 + `torch_npu`, `rwkv7_hf` + the C++ forward reachable):
