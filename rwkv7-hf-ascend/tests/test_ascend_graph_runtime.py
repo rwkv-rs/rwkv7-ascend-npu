@@ -58,3 +58,21 @@ def test_quant_buffer_replacement_changes_graph_module_signature():
 
     assert before
     assert before != after
+
+
+def test_hf_w8_buffer_replacement_changes_graph_module_signature():
+    from rwkv7_hf.ascend_quant import AscendW8A16Linear
+
+    layers = torch.nn.ModuleList(
+        [AscendW8A16Linear(2, 3, admitted_rows=(1,))]
+    )
+    layers[0].q_weight = torch.ones(2, 3, dtype=torch.int8)
+    layers[0].scale = torch.ones(3, dtype=torch.float16)
+    owner = SimpleNamespace(model=SimpleNamespace(layers=layers))
+
+    before = graph_runtime.ascend_graph_module_signature(owner)
+    layers[0].q_weight = layers[0].q_weight.clone()
+    after = graph_runtime.ascend_graph_module_signature(owner)
+
+    assert before
+    assert before != after
