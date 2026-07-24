@@ -84,3 +84,38 @@ def test_wkv_initial_state_continues():
     o_full, _ = wkv_recurrent(r, w, k, v, kk, a_lr, scale=1.0)
     diff = (o_split.float() - o_full[:, h:].float()).abs().max().item()
     assert diff < 1e-4, f"initial_state continuation mismatch, max abs diff {diff}"
+
+
+def test_batched_fast_path_matches_independent_sequence_walks():
+    """Vectorizing B must not change per-request recurrence or carried state."""
+    r, w, k, v, kk, a_lr = _inputs(B=4, T=5, H=3, K=4, seed=19)
+    initial = torch.randn(4, 3, 4, 4) * 0.1
+    batch_out, batch_state = wkv_recurrent(
+        r,
+        w,
+        k,
+        v,
+        kk,
+        a_lr,
+        scale=1.0,
+        initial_state=initial,
+        output_final_state=True,
+    )
+    independent = [
+        wkv_recurrent(
+            r[i : i + 1],
+            w[i : i + 1],
+            k[i : i + 1],
+            v[i : i + 1],
+            kk[i : i + 1],
+            a_lr[i : i + 1],
+            scale=1.0,
+            initial_state=initial[i : i + 1],
+            output_final_state=True,
+        )
+        for i in range(4)
+    ]
+    expected_out = torch.cat([item[0] for item in independent], dim=0)
+    expected_state = torch.cat([item[1] for item in independent], dim=0)
+    torch.testing.assert_close(batch_out, expected_out, rtol=1e-6, atol=1e-6)
+    torch.testing.assert_close(batch_state, expected_state, rtol=1e-6, atol=1e-6)

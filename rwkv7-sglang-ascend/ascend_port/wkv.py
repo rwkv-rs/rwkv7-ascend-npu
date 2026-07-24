@@ -100,26 +100,40 @@ def wkv_recurrent(
     # ops (aclnn LayerNorm rejects fp32 input + bf16 weight, EZ1001). The state
     # (ht) stays fp32.
     out_dtype = r.dtype
-    r = r.float(); w = w.float(); k = k.float(); v = v.float()
-    a_kernel = a_kernel.float(); b_kernel = b_kernel.float()
+    r = r.float()
+    w = w.float()
+    k = k.float()
+    v = v.float()
+    a_kernel = a_kernel.float()
+    b_kernel = b_kernel.float()
     dev = r.device
 
     if cu_seqlens is None:
         # Batched: B sequences, each length T.
         N = B
         if initial_state is not None:
-            S0 = initial_state.float()                         # [N, H, K, V]
+            S = initial_state.float()                          # [B, H, K, V]
         else:
-            S0 = torch.zeros(N, H, K, V, device=dev, dtype=torch.float32)
-        o_list, s_list = [], []
-        for b in range(B):
-            ob, sb = _wkv_one_seq(
-                r[b], w[b], k[b], v[b], a_kernel[b], b_kernel[b], scale, S0[b]
+            S = torch.zeros(N, H, K, V, device=dev, dtype=torch.float32)
+
+        # HF's native path advances the whole active batch at once. Preserve
+        # the unavoidable time dependency, but vectorize independent requests
+        # instead of launching the recurrence once per request. Decode has
+        # T == 1, so this removes the Python B-loop from every model layer.
+        outs = []
+        for t in range(T):
+            rt, wt, kt = r[:, t], w[:, t], k[:, t]
+            vt, at, bt = v[:, t], a_kernel[:, t], b_kernel[:, t]
+            sa = (at.unsqueeze(-1) * S).sum(dim=2)             # [B, H, V]
+            S = (
+                torch.exp(wt).unsqueeze(-1) * S
+                + bt.unsqueeze(-1) * sa.unsqueeze(2)
+                + kt.unsqueeze(-1) * vt.unsqueeze(2)
             )
-            o_list.append(ob)
-            s_list.append(sb)
-        o = torch.stack(o_list, dim=0)                          # [B, T, H, V]
-        ht = torch.stack(s_list, dim=0)                         # [B, H, K, V]
+            ot = (S * (rt * scale).unsqueeze(-1)).sum(dim=2)   # [B, H, V]
+            outs.append(ot)
+        o = torch.stack(outs, dim=1)                            # [B, T, H, V]
+        ht = S                                                  # [B, H, K, V]
         return (o.to(out_dtype), ht) if output_final_state else (o.to(out_dtype), None)
 
     # Packed varlen (B == 1).
