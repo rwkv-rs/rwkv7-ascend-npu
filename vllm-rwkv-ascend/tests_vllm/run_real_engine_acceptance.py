@@ -1,17 +1,19 @@
 #!/usr/bin/env python3
 """Real vLLM V1 dynamic/chunked/recurrent-cache acceptance on Ascend."""
+
 from __future__ import annotations
 
 import argparse
 import importlib.metadata
 import json
 import os
-from pathlib import Path
 import time
+from pathlib import Path
 
 os.environ.setdefault("VLLM_LOGGING_LEVEL", "INFO")
 
 from transformers import AutoTokenizer
+
 from vllm import LLM, SamplingParams
 
 
@@ -105,7 +107,9 @@ def main() -> None:
         first[key]["output_token_ids"] == second[key]["output_token_ids"]
         for key, _ in requests
     )
-    assert all(first[key]["finished"] and second[key]["finished"] for key, _ in requests)
+    assert all(
+        first[key]["finished"] and second[key]["finished"] for key, _ in requests
+    )
 
     raw = [
         json.loads(line)
@@ -121,7 +125,9 @@ def main() -> None:
     second_events = raw[boundary + 1 :]
     events = first_events + second_events
     scheduler_events = [event for event in events if "num_prefills" in event]
-    zero_events = [event for event in events if event.get("event") == "fresh_state_zero"]
+    zero_events = [
+        event for event in events if event.get("event") == "fresh_state_zero"
+    ]
     prefill_events = [event for event in scheduler_events if event["num_prefills"] > 0]
     actual_prefill_tokens = sum(event["num_prefill_tokens"] for event in prefill_events)
     # A singleton prompt can be represented as a decode by vLLM Mamba metadata.

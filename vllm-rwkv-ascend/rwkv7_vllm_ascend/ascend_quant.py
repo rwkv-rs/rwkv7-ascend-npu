@@ -7,14 +7,16 @@ Quantization is disabled unless both environment variables documented in
 labelled raw-kernel-candidate scope; production admission remains closed until
 an engine-level quality, HBM and latency artifact is committed.
 """
+
 from __future__ import annotations
 
-from dataclasses import dataclass
 import hashlib
 import json
 import os
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Mapping
+from typing import Any
 
 import torch
 from torch import Tensor, nn
@@ -66,8 +68,12 @@ def _sha256_tensor(tensor: Tensor) -> str:
 
 def _read_cann_version() -> str | None:
     candidates = (
-        Path("/usr/local/Ascend/ascend-toolkit/latest/aarch64-linux/ascend_toolkit_install.info"),
-        Path("/usr/local/Ascend/ascend-toolkit/latest/x86_64-linux/ascend_toolkit_install.info"),
+        Path(
+            "/usr/local/Ascend/ascend-toolkit/latest/aarch64-linux/ascend_toolkit_install.info"
+        ),
+        Path(
+            "/usr/local/Ascend/ascend-toolkit/latest/x86_64-linux/ascend_toolkit_install.info"
+        ),
         Path("/usr/local/Ascend/cann/aarch64-linux/ascend_toolkit_install.info"),
     )
     for path in candidates:
@@ -92,7 +98,7 @@ class RuntimeFingerprint:
     device: str = "npu:0"
 
     @classmethod
-    def detect(cls) -> tuple["RuntimeFingerprint", Callable[..., Tensor]]:
+    def detect(cls) -> tuple[RuntimeFingerprint, Callable[..., Tensor]]:
         try:
             import torch_npu  # type: ignore
         except ImportError as exc:
@@ -115,7 +121,9 @@ class RuntimeFingerprint:
                 torch_version=_base_version(torch.__version__),
                 torch_npu_version=_base_version(torch_npu.__version__),
                 cann_version=str(_read_cann_version()),
-                operator_schema_sha256=hashlib.sha256(schema.encode("utf-8")).hexdigest(),
+                operator_schema_sha256=hashlib.sha256(
+                    schema.encode("utf-8")
+                ).hexdigest(),
             ),
             op,
         )
@@ -153,7 +161,7 @@ class TensorRecord:
     sha256: str
 
     @classmethod
-    def parse(cls, value: Any, name: str) -> "TensorRecord":
+    def parse(cls, value: Any, name: str) -> TensorRecord:
         if not isinstance(value, Mapping):
             raise AscendQuantConfigError(f"tensors[{name!r}] must be an object")
         try:
@@ -165,7 +173,9 @@ class TensorRecord:
         if any(dim < 0 for dim in shape):
             raise AscendQuantConfigError(f"negative tensor dimension for {name}")
         if dtype not in {"int8", "int32", "float16"}:
-            raise AscendQuantConfigError(f"unsupported packed dtype {dtype!r} for {name}")
+            raise AscendQuantConfigError(
+                f"unsupported packed dtype {dtype!r} for {name}"
+            )
         if len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest):
             raise AscendQuantConfigError(f"invalid lowercase SHA256 for {name}")
         return cls(shape, dtype, digest)
@@ -202,7 +212,7 @@ class AscendQuantManifest:
         backend: str,
         manifest_path: str | None = None,
         manifest_sha256: str | None = None,
-    ) -> "AscendQuantManifest":
+    ) -> AscendQuantManifest:
         required = {
             "format",
             "version",
@@ -233,14 +243,18 @@ class AscendQuantManifest:
             raise AscendQuantConfigError("only FP16 activations were measured")
         if raw["acceptance_scope"] != "raw-kernel-candidate-only":
             raise AscendQuantConfigError(
-                "only raw-kernel-candidate-only scope exists; production is not admitted"
+                "only raw-kernel-candidate-only scope exists; "
+                "production is not admitted"
             )
         if raw["production_accepted"] is not False:
             raise AscendQuantConfigError(
-                "production_accepted must remain false until a real engine E2E gate passes"
+                "production_accepted must remain false until a real "
+                "engine E2E gate passes"
             )
         if raw["operator_schema_sha256"] != EXPECTED_OPERATOR_SCHEMA_SHA256:
-            raise AscendQuantConfigError("operator schema hash does not match the measured ABI")
+            raise AscendQuantConfigError(
+                "operator schema hash does not match the measured ABI"
+            )
         expected_stack = {
             "device_name": EXPECTED_DEVICE_NAME,
             "torch_version": EXPECTED_TORCH_VERSION,
@@ -248,20 +262,31 @@ class AscendQuantManifest:
             "cann_version": EXPECTED_CANN_VERSION,
         }
         if raw["verified_stack"] != expected_stack:
-            raise AscendQuantConfigError("verified_stack must equal the exact measured stack")
+            raise AscendQuantConfigError(
+                "verified_stack must equal the exact measured stack"
+            )
         try:
-            shapes = tuple(tuple(int(x) for x in pair) for pair in raw["verified_ffn_shapes"])
+            shapes = tuple(
+                tuple(int(x) for x in pair) for pair in raw["verified_ffn_shapes"]
+            )
         except (TypeError, ValueError) as exc:
-            raise AscendQuantConfigError("verified_ffn_shapes must be integer [K,N] pairs") from exc
-        if set(shapes) != set(VERIFIED_FFN_SHAPES) or len(shapes) != len(VERIFIED_FFN_SHAPES):
-            raise AscendQuantConfigError("verified_ffn_shapes differs from measured RWKV-7 FFN shapes")
+            raise AscendQuantConfigError(
+                "verified_ffn_shapes must be integer [K,N] pairs"
+            ) from exc
+        if set(shapes) != set(VERIFIED_FFN_SHAPES) or len(shapes) != len(
+            VERIFIED_FFN_SHAPES
+        ):
+            raise AscendQuantConfigError(
+                "verified_ffn_shapes differs from measured RWKV-7 FFN shapes"
+            )
         bit = int(raw["bit"])
         if bit not in (4, 8):
             raise AscendQuantConfigError("bit must be 4 or 8")
         group_size = int(raw["group_size"])
         if group_size != RAW_CANDIDATE_GROUP_SIZE[bit]:
             raise AscendQuantConfigError(
-                f"bit={bit} requires measured group_size={RAW_CANDIDATE_GROUP_SIZE[bit]}"
+                f"bit={bit} requires measured group_size="
+                f"{RAW_CANDIDATE_GROUP_SIZE[bit]}"
             )
         try:
             admitted_rows = tuple(int(row) for row in raw["admitted_rows"])
@@ -275,15 +300,21 @@ class AscendQuantManifest:
             )
         ffn = raw["ffn"]
         if not isinstance(ffn, Mapping) or set(ffn) != {"key_layers", "value_layers"}:
-            raise AscendQuantConfigError("ffn must contain exactly key_layers and value_layers")
+            raise AscendQuantConfigError(
+                "ffn must contain exactly key_layers and value_layers"
+            )
 
         def parse_layers(name: str) -> tuple[int, ...]:
             try:
                 values = tuple(int(item) for item in ffn[name])
             except (TypeError, ValueError) as exc:
-                raise AscendQuantConfigError(f"{name} must be integer layer ids") from exc
+                raise AscendQuantConfigError(
+                    f"{name} must be integer layer ids"
+                ) from exc
             if len(values) != len(set(values)) or any(item < 0 for item in values):
-                raise AscendQuantConfigError(f"{name} must contain unique non-negative ids")
+                raise AscendQuantConfigError(
+                    f"{name} must contain unique non-negative ids"
+                )
             return values
 
         key_layers = parse_layers("key_layers")
@@ -292,11 +323,16 @@ class AscendQuantManifest:
             raise AscendQuantConfigError("at least one FFN projection must be selected")
         source = str(raw["source"])
         if source not in {"fp-checkpoint", "packed-checkpoint"}:
-            raise AscendQuantConfigError("source must be fp-checkpoint or packed-checkpoint")
+            raise AscendQuantConfigError(
+                "source must be fp-checkpoint or packed-checkpoint"
+            )
         tensor_raw = raw["tensors"]
         if not isinstance(tensor_raw, Mapping):
             raise AscendQuantConfigError("tensors must be an object")
-        records = {str(name): TensorRecord.parse(value, str(name)) for name, value in tensor_raw.items()}
+        records = {
+            str(name): TensorRecord.parse(value, str(name))
+            for name, value in tensor_raw.items()
+        }
         manifest = cls(
             backend=backend,
             bit=bit,
@@ -313,13 +349,15 @@ class AscendQuantManifest:
         return manifest
 
     @classmethod
-    def from_path(cls, path: str | Path, *, backend: str) -> "AscendQuantManifest":
+    def from_path(cls, path: str | Path, *, backend: str) -> AscendQuantManifest:
         manifest_path = Path(path)
         try:
             payload = manifest_path.read_bytes()
             raw = json.loads(payload)
         except (OSError, json.JSONDecodeError) as exc:
-            raise AscendQuantConfigError(f"cannot read quant manifest {manifest_path}") from exc
+            raise AscendQuantConfigError(
+                f"cannot read quant manifest {manifest_path}"
+            ) from exc
         if not isinstance(raw, Mapping):
             raise AscendQuantConfigError("quant manifest root must be an object")
         return cls.from_mapping(
@@ -329,7 +367,9 @@ class AscendQuantManifest:
             manifest_sha256=hashlib.sha256(payload).hexdigest(),
         )
 
-    def expected_component_shapes(self, layer: int, projection: str) -> dict[str, tuple[tuple[int, ...], str]]:
+    def expected_component_shapes(
+        self, layer: int, projection: str
+    ) -> dict[str, tuple[tuple[int, ...], str]]:
         # Shape is selected from the measured pair when the module is constructed;
         # this helper is completed by AscendPackedLinear.expected_components().
         del layer, projection
@@ -338,12 +378,16 @@ class AscendQuantManifest:
     def _validate_tensor_records(self) -> None:
         if self.source == "fp-checkpoint":
             if self.tensor_records:
-                raise AscendQuantConfigError("fp-checkpoint source requires an empty tensors object")
+                raise AscendQuantConfigError(
+                    "fp-checkpoint source requires an empty tensors object"
+                )
             return
         expected_names = set()
         for layer, projection in self.selected:
             base = self.module_path(layer, projection)
-            expected_names.update({base + ".qweight", base + ".scales", base + ".offsets"})
+            expected_names.update(
+                {base + ".qweight", base + ".scales", base + ".offsets"}
+            )
         if set(self.tensor_records) != expected_names:
             missing = sorted(expected_names - set(self.tensor_records))
             extra = sorted(set(self.tensor_records) - expected_names)
@@ -371,7 +415,9 @@ class AscendPackedLinear(nn.Module):
     once after loading and are not part of the state_dict.
     """
 
-    def __init__(self, in_features: int, out_features: int, *, bit: int, group_size: int) -> None:
+    def __init__(
+        self, in_features: int, out_features: int, *, bit: int, group_size: int
+    ) -> None:
         super().__init__()
         self.in_features = int(in_features)
         self.out_features = int(out_features)
@@ -388,7 +434,8 @@ class AscendPackedLinear(nn.Module):
         if self.bit == 8 and self.group_size != 0:
             raise ValueError("W8 group_size must be zero")
         self.register_buffer(
-            "qweight", torch.empty(0, dtype=torch.int32 if self.bit == 4 else torch.int8)
+            "qweight",
+            torch.empty(0, dtype=torch.int32 if self.bit == 4 else torch.int8),
         )
         self.register_buffer("scales", torch.empty(0, dtype=torch.float16))
         self.register_buffer("offsets", torch.empty(0, dtype=torch.float16))
@@ -410,8 +457,14 @@ class AscendPackedLinear(nn.Module):
             }
         return {
             "qweight": ((self.in_features, self.out_features // 8), "int32"),
-            "scales": ((self.in_features // self.group_size, self.out_features), "float16"),
-            "offsets": ((self.in_features // self.group_size, self.out_features), "float16"),
+            "scales": (
+                (self.in_features // self.group_size, self.out_features),
+                "float16",
+            ),
+            "offsets": (
+                (self.in_features // self.group_size, self.out_features),
+                "float16",
+            ),
         }
 
     @torch.no_grad()
@@ -420,10 +473,13 @@ class AscendPackedLinear(nn.Module):
             raise AscendQuantLoadError("projection was loaded more than once")
         if tuple(weight.shape) != (self.out_features, self.in_features):
             raise AscendQuantLoadError(
-                f"source weight shape {tuple(weight.shape)} != {(self.out_features, self.in_features)}"
+                f"source weight shape {tuple(weight.shape)} != "
+                f"{(self.out_features, self.in_features)}"
             )
         if not weight.dtype.is_floating_point:
-            raise AscendQuantLoadError("source checkpoint weight must be floating point")
+            raise AscendQuantLoadError(
+                "source checkpoint weight must be floating point"
+            )
         wf = weight.detach().to(device="cpu", dtype=torch.float32)
         if self.bit == 8:
             scales = (wf.abs().amax(dim=1) / 127.0).clamp_min(1e-8)
@@ -435,7 +491,9 @@ class AscendPackedLinear(nn.Module):
             groups = self.in_features // self.group_size
             grouped = wf.reshape(self.out_features, groups, self.group_size)
             scales_ng = (grouped.abs().amax(dim=2) / 7.0).clamp_min(1e-8)
-            q_nk = torch.round(grouped / scales_ng[:, :, None]).clamp(-8, 7).to(torch.int8)
+            q_nk = (
+                torch.round(grouped / scales_ng[:, :, None]).clamp(-8, 7).to(torch.int8)
+            )
             self.qweight = _pack_int4_cpu(
                 q_nk.reshape(self.out_features, self.in_features).t().contiguous()
             )
@@ -450,7 +508,10 @@ class AscendPackedLinear(nn.Module):
         if component in self._loaded_components:
             raise AscendQuantLoadError(f"duplicate packed component {component}")
         expected_shape, expected_dtype = self.expected_components()[component]
-        if tuple(tensor.shape) != expected_shape or str(tensor.dtype).removeprefix("torch.") != expected_dtype:
+        if (
+            tuple(tensor.shape) != expected_shape
+            or str(tensor.dtype).removeprefix("torch.") != expected_dtype
+        ):
             raise AscendQuantLoadError(
                 f"{component} must be {expected_shape} {expected_dtype}, got "
                 f"{tuple(tensor.shape)} {tensor.dtype}"
@@ -462,15 +523,23 @@ class AscendPackedLinear(nn.Module):
         expected = self.expected_components()
         if self._loaded_components != set(expected):
             raise AscendQuantLoadError(
-                f"missing packed components: {sorted(set(expected) - self._loaded_components)}"
+                "missing packed components: "
+                f"{sorted(set(expected) - self._loaded_components)}"
             )
         if list(self.named_parameters(recurse=False)):
             raise AscendQuantLoadError("quant projection must not retain parameters")
-        if set(dict(self.named_buffers(recurse=False))) != {"qweight", "scales", "offsets"}:
+        if set(dict(self.named_buffers(recurse=False))) != {
+            "qweight",
+            "scales",
+            "offsets",
+        }:
             raise AscendQuantLoadError("quant projection buffer set changed")
         for name, (shape, dtype) in expected.items():
             tensor = getattr(self, name)
-            if tuple(tensor.shape) != shape or str(tensor.dtype).removeprefix("torch.") != dtype:
+            if (
+                tuple(tensor.shape) != shape
+                or str(tensor.dtype).removeprefix("torch.") != dtype
+            ):
                 raise AscendQuantLoadError(f"invalid stored {name}")
         if hasattr(self, "weight"):
             raise AscendQuantLoadError("dense weight attribute is forbidden")
@@ -491,12 +560,15 @@ class AscendPackedLinear(nn.Module):
         kernels: dict[int, Callable[[Tensor], Tensor]] = {}
         if self.bit == 8:
             for rows in admitted_rows:
+
                 def kernel(x: Tensor, _op=op, _q=qweight, _s=scales):
                     return _op(x, _q, _s)
+
                 kernels[int(rows)] = kernel
         else:
             group_size = self.group_size
             for rows in admitted_rows:
+
                 def kernel(
                     x: Tensor,
                     _op=op,
@@ -506,6 +578,7 @@ class AscendPackedLinear(nn.Module):
                     _g=group_size,
                 ):
                     return _op(x, _q, _s, _o, None, None, None, _g, 1)
+
                 kernels[int(rows)] = kernel
         self._kernels = kernels
         self._expected_device_type = device.type
@@ -515,16 +588,25 @@ class AscendPackedLinear(nn.Module):
         # expensive stack and shape admission policy was evaluated once at bind.
         if x.ndim != 2 or x.shape[1] != self.in_features:
             raise AscendQuantRuntimeError(
-                f"quant projection requires [M,{self.in_features}], got {tuple(x.shape)}"
+                f"quant projection requires [M,{self.in_features}], "
+                f"got {tuple(x.shape)}"
             )
         if x.dtype is not torch.float16:
-            raise AscendQuantRuntimeError("quant projection accepts FP16 activations only")
-        if self._expected_device_type is None or x.device.type != self._expected_device_type:
-            raise AscendQuantRuntimeError("quant projection is unbound or on the wrong device")
+            raise AscendQuantRuntimeError(
+                "quant projection accepts FP16 activations only"
+            )
+        if (
+            self._expected_device_type is None
+            or x.device.type != self._expected_device_type
+        ):
+            raise AscendQuantRuntimeError(
+                "quant projection is unbound or on the wrong device"
+            )
         kernel = self._kernels.get(int(x.shape[0]))
         if kernel is None:
             raise AscendQuantRuntimeError(
-                f"M={x.shape[0]} has no pre-bound raw-candidate kernel; admitted={tuple(self._kernels)}"
+                f"M={x.shape[0]} has no pre-bound raw-candidate kernel; "
+                f"admitted={tuple(self._kernels)}"
             )
         return kernel(x)
 
@@ -556,7 +638,9 @@ class AscendQuantActivation:
         runtime.validate_exact()
         device = torch.device(execution_device)
         if device.type != "npu" and not allow_cpu_test:
-            raise AscendQuantRuntimeError("production quant activation requires an NPU device")
+            raise AscendQuantRuntimeError(
+                "production quant activation requires an NPU device"
+            )
         self.manifest = manifest
         self.runtime = runtime
         self.op = op
@@ -596,12 +680,17 @@ class AscendQuantActivation:
         )
         if invalid_layers:
             raise AscendQuantConfigError(
-                f"manifest selects layers outside model: {invalid_layers}; num_layers={num_layers}"
+                f"manifest selects layers outside model: {invalid_layers}; "
+                f"num_layers={num_layers}"
             )
-        expected = {self.manifest.module_path(layer, projection) for layer, projection in self.manifest.selected}
+        expected = {
+            self.manifest.module_path(layer, projection)
+            for layer, projection in self.manifest.selected
+        }
         if set(self.modules) != expected:
             raise AscendQuantConfigError(
-                f"selected projection construction mismatch: expected={sorted(expected)}, "
+                "selected projection construction mismatch: "
+                f"expected={sorted(expected)}, "
                 f"actual={sorted(self.modules)}"
             )
         if self.manifest.source == "packed-checkpoint":
@@ -610,12 +699,14 @@ class AscendQuantActivation:
                     record = self.manifest.tensor_records[path + "." + component]
                     if record.shape != shape or record.dtype != dtype:
                         raise AscendQuantConfigError(
-                            f"packed metadata for {path}.{component} does not match module ABI"
+                            f"packed metadata for {path}.{component} "
+                            "does not match module ABI"
                         )
 
     def owns_selected_namespace(self, checkpoint_name: str) -> bool:
         return any(
-            checkpoint_name == path + ".weight" or checkpoint_name.startswith(path + ".")
+            checkpoint_name == path + ".weight"
+            or checkpoint_name.startswith(path + ".")
             for path in self.modules
         )
 
@@ -624,20 +715,22 @@ class AscendQuantActivation:
             if checkpoint_name == path + ".weight":
                 if self.manifest.source != "fp-checkpoint":
                     raise AscendQuantLoadError(
-                        f"{checkpoint_name} supplied but manifest requires packed-checkpoint"
+                        f"{checkpoint_name} supplied but manifest "
+                        "requires packed-checkpoint"
                     )
                 module.load_fp_weight(tensor)
                 return True
             prefix = path + "."
             if checkpoint_name.startswith(prefix):
-                component = checkpoint_name[len(prefix):]
+                component = checkpoint_name[len(prefix) :]
                 if component not in {"qweight", "scales", "offsets"}:
                     raise AscendQuantLoadError(
                         f"unexpected selected projection tensor {checkpoint_name}"
                     )
                 if self.manifest.source != "packed-checkpoint":
                     raise AscendQuantLoadError(
-                        f"{checkpoint_name} supplied but manifest requires fp-checkpoint"
+                        f"{checkpoint_name} supplied but manifest "
+                        "requires fp-checkpoint"
                     )
                 record = self.manifest.tensor_records[checkpoint_name]
                 actual_dtype = str(tensor.dtype).removeprefix("torch.")
@@ -655,7 +748,9 @@ class AscendQuantActivation:
 
     def finish_load(self) -> dict[str, Any]:
         if self._finished:
-            raise AscendQuantLoadError("quant checkpoint loader finalized more than once")
+            raise AscendQuantLoadError(
+                "quant checkpoint loader finalized more than once"
+            )
         total_packed = 0
         total_fp = 0
         for path, module in sorted(self.modules.items()):
@@ -720,7 +815,8 @@ def activate_quant_from_env(
         )
     if ack != "1":
         raise AscendQuantConfigError(
-            f"raw-candidate execution requires {RAW_ACK_ENV}=1; it is not production acceptance"
+            f"raw-candidate execution requires {RAW_ACK_ENV}=1; "
+            "it is not production acceptance"
         )
     manifest = AscendQuantManifest.from_path(path, backend=backend)
     runtime, op = RuntimeFingerprint.detect()

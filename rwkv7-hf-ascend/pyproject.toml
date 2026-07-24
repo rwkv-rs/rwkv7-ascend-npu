@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rwkv7-hf-adapter"
+version = "0.6.0"
+description = "Native Hugging Face adapter and converter for official RWKV-7 checkpoints."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "123123213weqw", email = "300659282+123123213weqw@users.noreply.github.com" }]
+dependencies = [
+  "torch",
+  "transformers",
+  "safetensors",
+]
+
+[project.optional-dependencies]
+cuda = ["ninja; platform_system == 'Linux'"]
+fla = ["flash-linear-attention"]
+fla-reference = ["flash-linear-attention"]
+test = [
+  "pytest>=8.0",
+  "numpy",
+  "tomli>=2.0; python_version < '3.11'",
+  "peft",
+  "accelerate",
+  "datasets",
+  "trl",
+  "mlx; platform_system == 'Darwin' and platform_machine == 'arm64'",
+]
+train = ["peft", "accelerate", "datasets", "trl", "deepspeed"]
+quant = ["bitsandbytes"]
+torchao = ["torchao; platform_system == 'Linux'"]
+mlx = ["mlx; platform_system == 'Darwin' and platform_machine == 'arm64'"]
+
+[tool.setuptools.packages.find]
+include = ["rwkv7_hf*"]
+
+[tool.setuptools.package-data]
+rwkv7_hf = ["csrc/marlin/*", "csrc/marlin/core/*", "csrc/train_temp/*"]

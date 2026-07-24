@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """Load the real checkpoint through vLLM V1/Ascend and generate two tokens."""
+
 from __future__ import annotations
 
 import argparse
 import json
 import os
-from pathlib import Path
 import time
+from pathlib import Path
 
 os.environ.setdefault("VLLM_LOGGING_LEVEL", "INFO")
 

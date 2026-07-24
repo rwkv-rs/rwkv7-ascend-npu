@@ -1,13 +1,11 @@
 from __future__ import annotations
 
 import hashlib
-from types import SimpleNamespace
 
 import pytest
+import rwkv7_vllm_ascend.ascend_quant as q
 import torch
 import torch.nn.functional as F
-
-import rwkv7_vllm_ascend.ascend_quant as q
 from rwkv7_vllm_ascend.model import RWKV7FFN, RawLinear
 
 
@@ -52,7 +50,9 @@ def _mapping(*, bit: int, k: int, n: int, source: str, tensors=None):
     }
 
 
-def _activation(monkeypatch, *, bit: int, k: int, n: int, source="fp-checkpoint", tensors=None):
+def _activation(
+    monkeypatch, *, bit: int, k: int, n: int, source="fp-checkpoint", tensors=None
+):
     monkeypatch.setattr(q, "VERIFIED_FFN_SHAPES", ((k, n),))
     calls = []
 
@@ -90,7 +90,9 @@ def test_dense_default_and_dense_ffn_regression(monkeypatch):
     torch.nn.init.normal_(ffn.value.weight, std=0.1)
     x = torch.randn(3, 8)
     got = ffn.value(torch.relu(ffn.key(x)).square())
-    expected = F.linear(torch.relu(F.linear(x, ffn.key.weight)).square(), ffn.value.weight)
+    expected = F.linear(
+        torch.relu(F.linear(x, ffn.key.weight)).square(), ffn.value.weight
+    )
     torch.testing.assert_close(got, expected)
 
 
@@ -131,9 +133,17 @@ def test_packed_manifest_hash_and_component_mapping(monkeypatch):
     offsets = torch.empty(0, dtype=torch.float16)
     base = "model.layers.0.ffn.key"
     tensors = {
-        base + ".qweight": {"shape": [k, n], "dtype": "int8", "sha256": _digest(qweight)},
+        base + ".qweight": {
+            "shape": [k, n],
+            "dtype": "int8",
+            "sha256": _digest(qweight),
+        },
         base + ".scales": {"shape": [n], "dtype": "float16", "sha256": _digest(scales)},
-        base + ".offsets": {"shape": [0], "dtype": "float16", "sha256": _digest(offsets)},
+        base + ".offsets": {
+            "shape": [0],
+            "dtype": "float16",
+            "sha256": _digest(offsets),
+        },
     }
     activation, calls = _activation(
         monkeypatch, bit=8, k=k, n=n, source="packed-checkpoint", tensors=tensors

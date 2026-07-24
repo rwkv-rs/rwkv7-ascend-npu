@@ -33,3 +33,8 @@ and full log.
 The startup log contains a non-fatal generic-vLLM Triton warning about
 `triton.tools.ragged_tma`; the model runs in enforced eager mode through the
 Ascend platform and the complete acceptance exits successfully.
+
+The `pr_real_engine_*` files are a third run made from the exact ruff-formatted
+plugin tree proposed in this repository. It also reports `ACCEPTANCE_OK`; its
+scheduler trace has the same SHA256 as both earlier runs. `pr_SHA256SUMS`
+authenticates that JSON, trace, and full log.
