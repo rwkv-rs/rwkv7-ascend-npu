@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtualenvs
+.venv/
+.venv-cpu-demo/
+venv/
+env/
+
+# Large model artifacts
+*.pth
+*.pt
+*.bin
+*.safetensors
+*.gguf
+models/
+checkpoints/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/

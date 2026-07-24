@@ -1,0 +1,93 @@
+{
+  "bits": {
+    "4": {
+      "bound_speedup_min": 1.0207561521926016,
+      "count": 4,
+      "min_cosine": 0.9928827881813049,
+      "module_speedup_max": 1.6689128076925124,
+      "module_speedup_min": 0.9127059873096208,
+      "raw_candidate_batches": [
+        1,
+        8
+      ],
+      "raw_speedup_max": 1.7841416069646006,
+      "raw_speedup_min": 1.0228765361237795,
+      "shapes": [
+        [
+          4096,
+          16384
+        ],
+        [
+          16384,
+          4096
+        ]
+      ],
+      "storage_ratio": 0.265625
+    },
+    "8": {
+      "bound_speedup_min": 1.0301629814388042,
+      "count": 4,
+      "min_cosine": 0.9999551773071289,
+      "module_speedup_max": 1.5739726043520825,
+      "module_speedup_min": 1.0266332752392537,
+      "raw_candidate_batches": [
+        17,
+        28
+      ],
+      "raw_speedup_max": 1.5805075344880453,
+      "raw_speedup_min": 1.0240456075759001,
+      "shapes": [
+        [
+          4096,
+          16384
+        ],
+        [
+          16384,
+          4096
+        ]
+      ],
+      "storage_ratio": 0.500244140625
+    }
+  },
+  "environment": {
+    "benchmark_git_commit": null,
+    "cann": "8.5.0",
+    "cann_inner_version": "V100R001C25SPC001B232",
+    "cann_install_info_sha256": "6838b6cf325287b02f49da9ce9f833cfb1c60cf571913431b9921720d2b39077",
+    "device": "Ascend910B3",
+    "driver_inner_version": "V100R001C23SPC005B219",
+    "driver_package_version": "25.5.0",
+    "driver_version": "25.5.0",
+    "driver_version_info_sha256": "573bf6989191f69a7619b0c3588727f05d368b26ee764070e7312cc0ee8a9102",
+    "git_dirty": null,
+    "git_status_porcelain": null,
+    "iters": 200,
+    "kind": "environment",
+    "npu_smi_output_sha256": "d320c2ecb002b5a47799f469e59885369f582a29f962cc1396170160be824491",
+    "npu_smi_version_line": "| npu-smi 25.5.0                   Version: 25.5.0                                               |",
+    "operator_schema": "npu::npu_weight_quant_batchmatmul(Tensor x, Tensor weight, Tensor antiquant_scale, Tensor? antiquant_offset=None, Tensor? quant_scale=None, Tensor? quant_offset=None, Tensor? bias=None, int antiquant_group_size=0, int inner_precise=0) -> Tensor",
+    "operator_schema_sha256": "f99a37dcc4e7d07f803bb83ce3d4c93ccbd15c41af1267d5a07dcc0d62e7dff0",
+    "python": "3.11.14",
+    "quant_module_sha256": "74b7f935060be13170be894f60f7e2669c7c8fad213a149739bfc447639c5469",
+    "rounds": 7,
+    "script_sha256": "5ffed6965f39cc3051d8bd05b91b457115a0126249c3b4839a0540b848c106b0",
+    "torch": "2.9.0+cpu",
+    "torch_npu": "2.9.0",
+    "warmup": 30
+  },
+  "errors": [],
+  "production_gate_passed": false,
+  "raw_candidate_gate_passed": true,
+  "source": "benchmarks/results/rebuild/ascend910b3_quant_dispatch.jsonl",
+  "thresholds": {
+    "max_storage_ratio": {
+      "4": 0.28,
+      "8": 0.51
+    },
+    "min_cosine": {
+      "4": 0.992,
+      "8": 0.9999
+    },
+    "raw_candidate_min_speedup": 1.02
+  }
+}

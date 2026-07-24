@@ -18,6 +18,14 @@ jobs:
           python -m pip install -q --upgrade pip
           pip install -q torch --index-url https://download.pytorch.org/whl/cpu
           pip install -q pytest
+          pip install -q -e ./rwkv7-hf-ascend
+      - name: rwkv7-hf-ascend (Huawei runtime, quant and oracle)
+        run: |
+          python -m pytest -q \
+            rwkv7-hf-ascend/tests/test_ascend_quant.py \
+            rwkv7-hf-ascend/tests/test_ascend_reference_oracle.py \
+            rwkv7-hf-ascend/tests/test_ascend_runtime.py \
+            rwkv7-hf-ascend/tests/test_ascend_w4_cle.py
       - name: vllm-rwkv-ascend (sampler unit + cpp-forward writeback fix)
         run: cd vllm-rwkv-ascend && PYTHONPATH=serving:. python -m pytest tests/test_sampler.py tests/test_cpp_forward.py tests/test_graph_greedy_scheduler.py tests/test_pth_engine.py -v
       - name: rwkv7-sglang-ascend (WKV recurrence vs reference)

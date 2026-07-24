@@ -24,7 +24,9 @@ requirements, see
 **RWKV-7 inference + serving on the Huawei Ascend 910B3 NPU — fast, correct, and at
 A100 parity for single-stream decode.**
 
-This repo consolidates the NPU work across three projects. The headline: a single
+This repository is the canonical monorepo for the Huawei work across Hugging
+Face, vLLM, SGLang, shared quantization, kernels, and reproducible acceptance
+evidence. The headline: a single
 `torch.npu.NPUGraph` capture of the decode step brings **B=1 latency from ~60 tok/s to
 353 tok/s (5.9×), matching an A100's CUDA-graph decode** — bit-exact, zero custom
 kernels, and it corrects the prior view that this needed multi-month AscendC kernel
@@ -73,14 +75,29 @@ handles). See [`BENCHMARK.md`](BENCHMARK.md) §3-4.
 
 | subdir | what | entry points |
 |---|---|---|
-| [`vllm-rwkv-ascend/`](vllm-rwkv-ascend/) | serving framework + C++ forward + **NPUGraph** | [`serving/graph_decode.py`](vllm-rwkv-ascend/serving/graph_decode.py), [`BENCHMARK.md`](vllm-rwkv-ascend/BENCHMARK.md), [`serving/SERVING.md`](vllm-rwkv-ascend/serving/SERVING.md) |
-| [`rwkv7-sglang-ascend/`](rwkv7-sglang-ascend/) | SGLang port + Triton-ascend WKV | [`ascend_port/model.py`](rwkv7-sglang-ascend/ascend_port/model.py), [`BENCH.md`](rwkv7-sglang-ascend/BENCH.md) |
+| [`rwkv7-hf-ascend/`](rwkv7-hf-ascend/) | complete HF package + Huawei runtime/oracle/evidence | [`README.md`](rwkv7-hf-ascend/README.md), [`HUAWEI_ASCEND.md`](rwkv7-hf-ascend/docs/hardware/HUAWEI_ASCEND.md) |
+| [`vllm-rwkv-ascend/`](vllm-rwkv-ascend/) | vLLM V1 plugin + serving framework + C++ forward + **NPUGraph** | [`README.md`](vllm-rwkv-ascend/README.md), [`VLLM_ASCEND_PRODUCTION.md`](vllm-rwkv-ascend/VLLM_ASCEND_PRODUCTION.md) |
+| [`rwkv7-sglang-ascend/`](rwkv7-sglang-ascend/) | external SGLang backend + recurrent state/cache scheduler | [`README.md`](rwkv7-sglang-ascend/README.md), [`ASCEND_FFN_QUANT.md`](rwkv7-sglang-ascend/ASCEND_FFN_QUANT.md) |
 | [`ascend-optimized/`](ascend-optimized/) | C++ forward + AscendC toolchain/kernels + benches | [`rwkv7_ascend_v3.cpp`](ascend-optimized/rwkv7_ascend_v3.cpp), [`ascendc/README.md`](ascend-optimized/ascendc/README.md) |
 
-`vllm-rwkv-ascend/` and `rwkv7-sglang-ascend/` preserve each project's full git history
-(imported via `git subtree`). `ascend-optimized/` holds the Ascend-specific work
-extracted from an rwkv7-hf-adapter fork (the upstream `rwkv7_hf` package is referenced by
-the C++ forward but not vendored).
+Each component retains its source provenance and license in its own directory.
+The complete `rwkv7_hf` package is vendored, so HF, vLLM, and SGLang development
+and validation no longer depend on publishing changes to separate repositories.
+
+## Unified repository validation
+
+The consolidated tree was rebuilt on the validated Ascend 910B3 environment:
+
+| component | focused tests | package build |
+|---|---:|---:|
+| `rwkv7-hf-ascend` | 18 passed | `rwkv7_hf_adapter-0.6.0` wheel |
+| `vllm-rwkv-ascend` V1 plugin | 18 passed | `rwkv7_vllm_ascend-0.3.0` wheel |
+| `rwkv7-sglang-ascend` | 16 passed | `sglang_rwkv7_ascend-0.2.0` wheel |
+| shared W8/W4 quant layer | 19 passed, 4 skipped | import-safe shared module |
+
+The real 7.2B HF, vLLM, and SGLang acceptance artifacts remain in their
+component evidence directories. Quantized production admission remains
+fail-closed for the latency and quality reasons documented below.
 
 ## Quick start
 
@@ -88,6 +105,9 @@ On a 910B3 box (CANN 8.5.0 + `torch_npu`, `rwkv7_hf` + the C++ forward reachable
 
 ```bash
 source /usr/local/Ascend/cann-8.5.0/set_env.sh
+
+# install the local Hugging Face runtime
+python -m pip install -e ./rwkv7-hf-ascend
 
 # reproduce the headline (NPUGraph vs eager, 5.9x at 0.1B B=1)
 python vllm-rwkv-ascend/perf/bench_npugraph.py
@@ -98,6 +118,22 @@ cd vllm-rwkv-ascend && python serving/serve_full.py \
 ```
 
 See each subdir's README/docs for model dims, env vars, and the full feature set.
+
+## Ascend W8/W4 status
+
+[`rwkv7_ascend_quant.py`](rwkv7_ascend_quant.py) and
+[`rwkv7_ascend_model_quant.py`](rwkv7_ascend_model_quant.py) implement a shared,
+quant-only RWKV-7 FFN checkpoint and loader path for HF, vLLM, and SGLang.
+Packed payload is about 50% of FP16 for W8 and 26.6% for group-128 W4, with no
+hidden dense FP16 weight copy.
+
+Selected 910B3 row counts beat the same-shape FP16 matmul in the raw synchronized
+operator sweep. A real 7.2B all-FFN diagnostic reduced active HBM to 70.44% for
+W8 and 57.49% for W4, but paired decode was 0.9800x and 0.9756x FP16,
+respectively, and a near-tied greedy choice changed. Production admission is
+therefore empty and fail-closed; W8/W4 remain explicit experiments until a
+backend end-to-end artifact passes. See
+[`ASCEND_QUANT_ACCEPTANCE.md`](ASCEND_QUANT_ACCEPTANCE.md).
 
 ## License
 

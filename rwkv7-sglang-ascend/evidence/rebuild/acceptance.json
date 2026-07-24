@@ -1,0 +1,226 @@
+{
+  "schema": "rwkv7-sglang-ascend-engine-acceptance-v1",
+  "started_at_unix": 1784859241.0198686,
+  "model": "/data/models/fla-hub-rwkv7-7.2B-g0a",
+  "command": [
+    "/data/venvs/sglang/bin/python",
+    "/data/work/quant-ascend/rwkv7-sglang-ascend/scripts/engine_worker.py",
+    "--model",
+    "/data/models/fla-hub-rwkv7-7.2B-g0a",
+    "--output",
+    "/data/work/quant-ascend/rwkv7-sglang-ascend/evidence/rebuild/acceptance.worker.json",
+    "--chunk-size",
+    "64",
+    "--max-new-tokens",
+    "8"
+  ],
+  "server_log": "/data/work/quant-ascend/rwkv7-sglang-ascend/evidence/rebuild/acceptance.server.log",
+  "backend_trace": "/data/work/quant-ascend/rwkv7-sglang-ascend/evidence/rebuild/acceptance.trace.jsonl",
+  "checks": {
+    "two_concurrent_requests_completed": true,
+    "long_prompt_crossed_prefill_chunk": true,
+    "slot_reuse_is_deterministic": true,
+    "backend_observed_dynamic_batch": true,
+    "backend_observed_mixed_decode_prefill": true,
+    "backend_observed_chunk_state_continuation": true,
+    "backend_observed_physical_slot_reuse": true,
+    "radix_cache_was_disabled": true,
+    "hello_matches_vllm_dense_output_ids": true,
+    "state_mode": "MambaPool active-request state; radix prefix cache disabled"
+  },
+  "responses": {
+    "long": {
+      "text": "User: 请问，如",
+      "prompt_tokens": 481,
+      "completion_tokens": 8,
+      "finish_reason": {
+        "type": "length",
+        "length": 8
+      }
+    },
+    "short": {
+      "text": "\nThe sky is blue because of Ray",
+      "prompt_tokens": 12,
+      "completion_tokens": 8,
+      "finish_reason": {
+        "type": "length",
+        "length": 8
+      }
+    },
+    "short_after_slot_release": {
+      "text": "\nThe sky is blue because of Ray",
+      "prompt_tokens": 12,
+      "completion_tokens": 8,
+      "finish_reason": {
+        "type": "length",
+        "length": 8
+      }
+    }
+  },
+  "passed": true,
+  "cross_backend_oracle": {
+    "prompt": "Hello",
+    "input_ids": [
+      33155
+    ],
+    "output_ids": [
+      45,
+      308,
+      459
+    ],
+    "text": ", I'm",
+    "expected_vllm_dense_output_ids": [
+      45,
+      308,
+      459
+    ]
+  },
+  "engine_config": {
+    "disable_radix_cache": true,
+    "enable_mixed_chunk": true,
+    "chunked_prefill_size": 64,
+    "max_running_requests": 2,
+    "max_mamba_cache_size": 8
+  },
+  "slot_probe_count": 9,
+  "batch_elapsed_seconds": 63.281567578203976,
+  "trace_evidence": {
+    "forward_event_count": 48,
+    "dynamic_batch_events": [
+      {
+        "kind": "forward",
+        "time_ns": 1784859374405276060,
+        "pid": 35758,
+        "mode": "MIXED",
+        "batch_size": 2,
+        "real_batch_size": 2,
+        "request_pool_indices": [
+          2,
+          1
+        ],
+        "state_slot_ids": [
+          4,
+          2
+        ],
+        "query_start_loc": [
+          0,
+          12,
+          13
+        ],
+        "extend_prefix_lens": [
+          0,
+          481
+        ],
+        "extend_seq_lens": [
+          12,
+          1
+        ]
+      },
+      {
+        "kind": "forward",
+        "time_ns": 1784859374738055312,
+        "pid": 35758,
+        "mode": "DECODE",
+        "batch_size": 2,
+        "real_batch_size": 2,
+        "request_pool_indices": [
+          2,
+          1
+        ],
+        "state_slot_ids": [
+          4,
+          2
+        ],
+        "query_start_loc": [
+          0,
+          1,
+          2
+        ],
+        "extend_prefix_lens": null,
+        "extend_seq_lens": null
+      },
+      {
+        "kind": "forward",
+        "time_ns": 1784859374904685598,
+        "pid": 35758,
+        "mode": "DECODE",
+        "batch_size": 2,
+        "real_batch_size": 2,
+        "request_pool_indices": [
+          2,
+          1
+        ],
+        "state_slot_ids": [
+          4,
+          2
+        ],
+        "query_start_loc": [
+          0,
+          1,
+          2
+        ],
+        "extend_prefix_lens": null,
+        "extend_seq_lens": null
+      }
+    ],
+    "mixed_decode_prefill_events": [
+      {
+        "kind": "forward",
+        "time_ns": 1784859374405276060,
+        "pid": 35758,
+        "mode": "MIXED",
+        "batch_size": 2,
+        "real_batch_size": 2,
+        "request_pool_indices": [
+          2,
+          1
+        ],
+        "state_slot_ids": [
+          4,
+          2
+        ],
+        "query_start_loc": [
+          0,
+          12,
+          13
+        ],
+        "extend_prefix_lens": [
+          0,
+          481
+        ],
+        "extend_seq_lens": [
+          12,
+          1
+        ]
+      }
+    ],
+    "continued_slot_prefixes": {
+      "2": [
+        0,
+        64,
+        128,
+        192,
+        256,
+        320,
+        384,
+        448,
+        481
+      ]
+    },
+    "slots_before_release": [
+      2,
+      4
+    ],
+    "slots_after_release": [
+      3,
+      4,
+      6,
+      8
+    ],
+    "reused_slots": [
+      4
+    ]
+  },
+  "elapsed_seconds": 148.91228821035475,
+  "server_returncode": 0
+}

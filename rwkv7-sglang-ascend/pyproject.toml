@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sglang-rwkv7-ascend"
+version = "0.2.0"
+description = "Out-of-tree RWKV-7 recurrent model backend for SGLang on Ascend"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "Apache-2.0"}
+dependencies = ["torch>=2.9,<2.10", "transformers==5.12.1"]
+
+[project.optional-dependencies]
+test = ["pytest>=8"]
+
+[project.scripts]
+sglang-rwkv7-ascend-serve = "sglang_rwkv7_ascend.serve:main"
+
+[project.entry-points."sglang.srt.plugins"]
+rwkv7_ascend = "sglang_rwkv7_ascend:register"
+
+[tool.setuptools.packages.find]
+include = ["sglang_rwkv7_ascend*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"

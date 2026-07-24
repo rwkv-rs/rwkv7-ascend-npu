@@ -1,0 +1,87 @@
+#!/usr/bin/env python3
+# coding=utf-8
+"""Single source of truth for files shipped with converted HF checkpoints.
+
+Keep this module dependency-free: converter and sync tools import it before
+optional ML/Apple dependencies are available. Runtime import closure is checked
+by ``tests/test_sync_hf_adapter_code.py``.
+"""
+from __future__ import annotations
+
+
+ADAPTER_FILES = [
+    "ada_lora.py",
+    "ada_sparse_ffn.py",
+    "blackwell_norm_mix.py",
+    "ascend_runtime.py",
+    "ascend_quant.py",
+    "ascend_quant_w4.py",
+    "ascend_w4_cle.py",
+    "dplr_prefill.py",
+    "dplr_prefill_triton.py",
+    "extension_build.py",
+    "fused_attention_projection.py",
+    "fused_ffn.py",
+    "fused_lora.py",
+    "fused_decode_norm_mix.py",
+    "fused_norm_mix.py",
+    "fused_output.py",
+    "fused_prefill.py",
+    "fused_projection.py",
+    "fused_recurrent_update.py",
+    "fused_elementwise.py",
+    "fused_time_mix.py",
+    "kernel_policy.py",
+    "mlx_bridge.py",
+    "mlx_cache.py",
+    "mlx_dplr_prefill.py",
+    "mlx_model.py",
+    "mlx_mix.py",
+    "mlx_norm.py",
+    "mlx_policy.py",
+    "mlx_quant.py",
+    "mlx_scan.py",
+    "mlx_scheduler.py",
+    "mlx_session.py",
+    "mlx_state.py",
+    "mlx_wkv.py",
+    "native.py",
+    "native_jit.py",
+    "native_graph_runtime.py",
+    "native_model.py",
+    "native_quant.py",
+    "native_quant_a8w8.py",
+    "native_quant_bnb8.py",
+    "native_quant_mm4.py",
+    "native_quant_mm8.py",
+    "native_quant_bn_tn.py",
+    "marlin_autotune.py",
+    "native_quant_marlin.py",
+    "native_quant_marlin_sources.py",
+    "native_quant_torchao.py",
+    "native_quant_policy.py",
+    "native_wkv_fp16.py",
+    "self_chunk_A_fwd.py",
+    "self_chunk_cumsum.py",
+    "self_chunk_h_fwd.py",
+    "self_chunk_o_fwd.py",
+    "self_chunk_rwkv7.py",
+    "self_chunk_utils.py",
+    "self_chunk_wy_fwd.py",
+    "sm70_linear.py",
+    "sm70_quant.py",
+    "sm70_wagv.py",
+    "triton_compat.py",
+    "tokenization_rwkv7.py",
+]
+
+# These files were shipped by the historical FLA-backed remote-code adapter.
+# Native checkpoints remove them so stale files cannot suggest or restore the
+# retired default route after an in-place code sync.
+LEGACY_REMOTE_CODE_FILES = [
+    "configuration_rwkv7.py",
+    "modeling_rwkv7.py",
+]
+
+
+__all__ = ["ADAPTER_FILES", "LEGACY_REMOTE_CODE_FILES"]
